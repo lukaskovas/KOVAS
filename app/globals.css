@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/*
+ * Paleta i typografia przeniesione 1:1 ze strony kovas.com
+ * (wp-content/themes/kovas/assets/css/stylesheet.css) - żeby panel wyglądał
+ * jak część marki, a nie jak generyczny dashboard.
+ */
+@theme inline {
+  --font-sans: var(--font-work-sans);
+  --font-display: var(--font-syne);
+
+  --color-cream: #f8f7ef;
+  --color-sand: #e8e1cc;
+  --color-gold: #d6caa8;
+  --color-gold-deep: #d6b968;
+  --color-plum: #391249;
+  --color-plum-dark: #260a32;
+  --color-plum-light: #531e68;
+  --color-ink: #18181e;
+}
+
+body {
+  font-family: var(--font-sans), Helvetica, Arial, sans-serif;
+}
+
+/* Nagłówki i elementy nawigacji - Syne, jak na kovas.com */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display), sans-serif;
+  font-weight: 700;
+}
