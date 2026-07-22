@@ -50,8 +50,10 @@ export const ORDER_COLUMNS: Column[] = [
   { key: "shipping_price_gross", header: "Transport brutto", type: "money", currencyKey: "currency_code", align: "right" },
   { key: "products_net", header: "Suma produktów netto", type: "money", currencyKey: "currency_code", align: "right", sortKey: "products_net" },
   { key: "products_gross", header: "Suma produktów brutto", type: "money", currencyKey: "currency_code", align: "right", sortKey: "products_gross" },
-  { key: "cogs_total", header: "CoGS", type: "money", currencyKey: "currency_code", align: "right", sortKey: "cogs_total" },
-  { key: "margin", header: "Marża", type: "money", currencyKey: "currency_code", align: "right", sortKey: "margin" },
+  // CoGS i Marża są zawsze w PLN: koszt własny pochodzi z wFirmy (PLN), a marża = net_pln - CoGS
+  // (migracja 0016). Dlatego bez currencyKey - sufiks "PLN" jest w nagłówku, jak w kolumnach *_pln.
+  { key: "cogs_total", header: "CoGS PLN", type: "money", align: "right", sortKey: "cogs_total" },
+  { key: "margin", header: "Marża PLN", type: "money", align: "right", sortKey: "margin" },
   // Przeliczenia NBP wg kursu z dnia poprzedzającego zamówienie (migracja 0005)
   { key: "rate_pln", header: "Kurs na PLN", type: "number", align: "right", optional: true },
   { key: "net_pln", header: "Wartość netto PLN", type: "money", align: "right", sortKey: "net_pln", optional: true },
@@ -86,7 +88,8 @@ export const PRODUCT_COLUMNS: Column[] = [
   { key: "vat_amount_per_unit", header: "VAT / szt", type: "money", currencyKey: "currency_code", align: "right", optional: true },
   { key: "vat_rate", header: "VAT %", type: "percent", align: "right", optional: true },
   { key: "currency_code", header: "Waluta", type: "text", optional: true },
-  { key: "cogs", header: "CoGS", type: "money", currencyKey: "currency_code", align: "right", sortKey: "cogs" },
+  // CoGS zawsze w PLN (koszt z wFirmy) - jak w raporcie zamówień, bez currencyKey (sufiks w nagłówku).
+  { key: "cogs", header: "CoGS PLN", type: "money", align: "right", sortKey: "cogs" },
 ];
 
 export const COMPANY_COLUMNS: Column[] = [
