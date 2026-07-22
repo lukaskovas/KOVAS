@@ -4,6 +4,7 @@ import {
   getKpi,
   getOrdersBy,
   getProducts,
+  getPurchases,
   REPORT_BY_KEY,
   STRUCTURE_BLOCKS,
   STRUCTURE_COLUMNS,
@@ -158,6 +159,9 @@ export async function GET(request: Request) {
     } else if (report === "produkty") {
       blocks = [block("Produkty", def.columns!, await getProducts(filters))];
       name = "raport-produkty";
+    } else if (report === "zakupy") {
+      blocks = [block("Zakupy", def.columns!, await getPurchases(filters))];
+      name = "raport-zakupy";
     } else {
       const dim = report === "okresy" ? period : def.dim!;
       blocks = [block(def.label, def.columns!, translate(dim, await getOrdersBy(dim, filters)))];

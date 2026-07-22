@@ -22,6 +22,7 @@ export default function Dropdown({
   options,
   searchable = false,
   includeEmpty = true,
+  fullWidth = false,
 }: {
   name: string;
   value?: string;
@@ -32,6 +33,9 @@ export default function Dropdown({
   /** Dokłada pustą opcję "placeholder" na górze listy (dla filtrów typu "wszyscy").
    *  Wyłącz dla pól, które zawsze mają wartość - np. wybór roli. */
   includeEmpty?: boolean;
+  /** Rozciąga przycisk i listę na całą szerokość rodzica (dla pól w formularzu).
+   *  Domyślnie komponent zwija się do szerokości treści - jak filtry w rzędzie. */
+  fullWidth?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(value ?? "");
@@ -62,14 +66,16 @@ export default function Dropdown({
   const overflow = searchable ? filtered.length - shown.length : 0;
 
   return (
-    <div ref={box} className="relative">
+    <div ref={box} className={`relative ${fullWidth ? "block" : "inline-block"}`}>
       <input type="hidden" name={name} value={selected} />
       <button
         type="button"
         onClick={() => { setOpen((o) => !o); setQuery(""); }}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className={`flex min-w-44 items-center justify-between gap-3 border bg-white px-3 py-1.5 text-left text-sm transition ${
+        className={`flex items-center justify-between gap-3 border bg-white px-3 py-1.5 text-left text-sm transition ${
+          fullWidth ? "w-full" : "min-w-44"
+        } ${
           selected ? "border-plum text-plum" : "border-gold text-ink"
         } hover:border-plum`}
       >

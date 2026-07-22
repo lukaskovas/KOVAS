@@ -2,6 +2,7 @@ import {
   getKpi,
   getOrdersBy,
   getProducts,
+  getPurchases,
   getDormant,
   REPORT_BY_KEY,
   STRUCTURE_BLOCKS,
@@ -207,7 +208,9 @@ export default async function AnalyticsView({
   const rows =
     report === "produkty"
       ? await getProducts(filters)
-      : await getOrdersBy(report === "okresy" ? period : def.dim!, filters);
+      : report === "zakupy"
+        ? await getPurchases(filters)
+        : await getOrdersBy(report === "okresy" ? period : def.dim!, filters);
 
   return (
     <>

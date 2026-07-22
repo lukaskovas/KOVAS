@@ -155,6 +155,22 @@ export async function getDormant(days: number, limit: number, agent?: string): P
   return rpc<AggRow>("report_dormant_companies", { p_days: days, p_limit: limit, p_agent: agent ?? null }, limit);
 }
 
+/**
+ * Zakupy per produkt - z dokumentów przyjęć magazynowych wFirma (migracja 0015).
+ * Inne źródło niż reszta raportów (wfirma_receipt_layers, nie mv_report_orders), więc osobna
+ * funkcja. Filtry ograniczone do zakresu dat przyjęcia i wyszukiwania - reszta filtrów
+ * (waluta/status/handlowiec) dotyczy sprzedaży i tu nie ma sensu, funkcja SQL je ignoruje.
+ */
+export async function getPurchases(f: AnalyticsFilters): Promise<AggRow[]> {
+  const limit = f.limit ?? 100;
+  const needle = f.q?.trim().replace(/[%_,()]/g, "") || null;
+  return rpc<AggRow>(
+    "report_purchases_by_product",
+    { p_from: f.from ?? null, p_to: f.to ?? null, p_q: needle, p_sort: f.sort ?? null, p_dir: f.dir ?? null, p_limit: limit },
+    limit,
+  );
+}
+
 // ============================================================
 // Definicje raportów - jedno źródło prawdy dla ekranu i eksportu CSV,
 // tak samo jak lib/report-columns.ts dla raportów szczegółowych.
@@ -183,7 +199,7 @@ const COL = {
 } satisfies Record<string, AggColumn>;
 
 export type ReportKey =
-  | "podsumowanie" | "handlowcy" | "kontrahenci" | "produkty" | "okresy" | "kraje" | "struktura" | "uspieni";
+  | "podsumowanie" | "handlowcy" | "kontrahenci" | "produkty" | "zakupy" | "okresy" | "kraje" | "struktura" | "uspieni";
 
 export type ReportDef = {
   key: ReportKey;
@@ -248,6 +264,28 @@ export const REPORTS: ReportDef[] = [
       COL.share,
       { key: "avg_price_pln", header: "Śr. cena netto", type: "money", align: "right", sort: "avg" },
       { key: "last_sale", header: "Ostatnia sprzedaż", type: "date", sort: "last" },
+    ],
+  },
+  {
+    key: "zakupy",
+    label: "Zakupy",
+    hint:
+      "Zakupy towaru per produkt - z dokumentów przyjęć magazynowych wFirma (PW/PZ). Ilość przyjęta, " +
+      "wartość zakupu netto w PLN i średnia (ważona) cena zakupu. To strona KOSZTOWA (ile i za ile " +
+      "kupiliśmy), niezależna od sprzedaży. Cło i transport (koszty uboczne zakupu) NIE są tu jeszcze " +
+      "rozbite na produkt - to osobne wydatki w wFirma, kwotami zbiorczymi na dostawę (patrz " +
+      "docs/OTWARTE-PYTANIA.md A17). Dostawca dojdzie po dosynchronizowaniu nagłówków przyjęć. Filtruje " +
+      "się zakresem daty przyjęcia i wyszukiwaniem; filtry sprzedażowe (waluta/status/handlowiec) tu nie działają.",
+    columns: [
+      { key: "label", header: "Kod / SKU", type: "mono", sort: "label" },
+      { key: "sublabel", header: "Nazwa towaru", type: "text", grow: true, sort: "name" },
+      { key: "items_qty", header: "Ilość przyjęta", type: "number", align: "right", sort: "qty" },
+      { key: "orders_count", header: "Przyjęć", type: "number", align: "right", sort: "orders" },
+      { key: "net_pln", header: "Wartość zakupu netto PLN", type: "money", align: "right", sort: "net" },
+      { key: "avg_price_pln", header: "Śr. cena zakupu", type: "money", align: "right", sort: "avg" },
+      COL.share,
+      { key: "first_order", header: "Pierwsze przyjęcie", type: "date", sort: "first" },
+      { key: "last_order", header: "Ostatnie przyjęcie", type: "date", sort: "last" },
     ],
   },
   {
