@@ -6,7 +6,7 @@
  * Importy względne (nie @/...) - tsx nie rozwiązuje aliasów z tsconfig.json bez dodatkowej
  * konfiguracji, a to prostszy, pewny wybór dla jednorazowego skryptu.
  */
-import { syncCompanies, syncProducts, syncAllOrders } from "../lib/sync/turis";
+import { syncCompanies, syncProducts, syncBrands, syncAllOrders } from "../lib/sync/turis";
 import { syncInvoices } from "../lib/sync/wfirma";
 import { matchInvoicesToOrders } from "../lib/sync/match-invoices";
 import { refreshReports } from "../lib/sync/refresh-reports";
@@ -22,6 +22,10 @@ async function main() {
   console.log("-> produkty (Turis)...");
   const productIndex = await syncProducts();
   console.log(`   ${productIndex.validIds.size} produktów\n`);
+
+  console.log("-> marki (Turis)...");
+  const brands = await syncBrands();
+  console.log(`   ${brands.upserted} marek\n`);
 
   console.log("-> zamówienia (Turis, ~700 stron - może potrwać kilka minut)...");
   const orders = await syncAllOrders(productIndex, companies.validIds, (page, last) => {

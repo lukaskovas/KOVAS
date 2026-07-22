@@ -182,3 +182,30 @@ export async function findWarehouseDocsPage(
 export function unwrapDocContents(doc: Record<string, unknown>): Record<string, unknown>[] {
   return unwrapIndexed<Record<string, unknown>>(doc.warehouse_document_contents, "warehouse_document_content");
 }
+
+/**
+ * Kontrahent wFirma po ID - nazwa dostawcy do raportu dostaw. Nagłówek przyjęcia (PZ) niesie
+ * sam `contractor.id`, więc nazwę trzeba dobrać osobno. Pobieramy per ID (dostawców na przyjęciach
+ * jest garść), a nie całą bazę kontrahentów - jej rozmiar rozbiłby się o współdzielony limit API.
+ * Zwraca listę: [] = nie znaleziono, pierwszy element = trafienie. Rate limit leci wyżej (withRetry).
+ */
+export async function findContractorById(id: number): Promise<Record<string, unknown>[]> {
+  const body = `<?xml version="1.0" encoding="UTF-8"?>
+<api>
+  <contractors>
+    <parameters>
+      <conditions>
+        <condition>
+          <field>id</field>
+          <operator>eq</operator>
+          <value>${id}</value>
+        </condition>
+      </conditions>
+      <page>1</page>
+      <limit>1</limit>
+    </parameters>
+  </contractors>
+</api>`;
+  const json = await wfirmaPost<{ contractors?: unknown }>("contractors", "find", body);
+  return unwrapIndexed<Record<string, unknown>>(json.contractors, "contractor");
+}

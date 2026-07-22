@@ -18,8 +18,15 @@ import { requireUser } from "@/lib/auth";
 type SearchParams = {
   r?: string; okres?: string; q?: string; from?: string; to?: string;
   currency?: string; status?: string; country?: string; agent?: string; ctype?: string;
-  sort?: string; dir?: string; limit?: string; dni?: string;
+  sort?: string; dir?: string; limit?: string; dni?: string; typ?: string;
 };
+
+/** Typy dokumentu dla raportu dostaw. "all" = oba typy (brak filtra po stronie SQL). */
+const DELIVERY_TYPES = [
+  { key: "PZ", label: "Przyjęcia zewnętrzne (PZ)" },
+  { key: "PW", label: "Przyjęcia wewnętrzne (PW)" },
+  { key: "all", label: "Oba typy" },
+] as const;
 
 /** Gotowe zakresy dat - najczęstsze pytania zarządu bez klikania w kalendarz. */
 function buildPresets(from: string | undefined, to: string | undefined, base: URLSearchParams): Preset[] {
@@ -60,6 +67,9 @@ export default async function Raporty({ searchParams }: { searchParams: Promise<
   const days = Math.max(1, Number(sp.dni ?? 90) || 90);
   const limit = Math.min(5000, Math.max(1, Number(sp.limit ?? 100) || 100));
 
+  // Raport dostaw: domyślnie PZ (przyjęcia zewnętrzne - to o co pytała Katia w pierwszej kolejności).
+  const deliveryType = sp.typ === "PW" ? "PW" : sp.typ === "all" ? "all" : "PZ";
+
   const filters: AF = {
     from: clean(sp.from),
     to: clean(sp.to),
@@ -68,6 +78,7 @@ export default async function Raporty({ searchParams }: { searchParams: Promise<
     country: clean(sp.country),
     agent: clean(sp.agent),
     ctype: clean(sp.ctype),
+    type: report === "dostawy" && deliveryType !== "all" ? deliveryType : undefined,
     q: clean(sp.q),
     sort: clean(sp.sort),
     dir: sp.dir === "asc" ? "asc" : sp.dir === "desc" ? "desc" : undefined,
@@ -80,6 +91,7 @@ export default async function Raporty({ searchParams }: { searchParams: Promise<
     r: report,
     okres: report === "okresy" ? period : undefined,
     dni: report === "uspieni" ? String(days) : undefined,
+    typ: report === "dostawy" ? deliveryType : undefined,
     q: filters.q,
     from: filters.from,
     to: filters.to,
@@ -124,7 +136,7 @@ export default async function Raporty({ searchParams }: { searchParams: Promise<
       </nav>
 
       <AnalyticsFilters
-        hidden={{ r: report, okres: params.okres, dni: params.dni, sort: filters.sort, dir: filters.dir }}
+        hidden={{ r: report, okres: params.okres, dni: params.dni, typ: params.typ, sort: filters.sort, dir: filters.dir }}
         active={{ ...filters, limit: sp.limit }}
         options={options}
         presets={buildPresets(filters.from, filters.to, qs())}
@@ -144,6 +156,22 @@ export default async function Raporty({ searchParams }: { searchParams: Promise<
               }`}
             >
               {p.label}
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {report === "dostawy" && (
+        <div className="mb-4 inline-flex border border-gold bg-white">
+          {DELIVERY_TYPES.map((t) => (
+            <Link
+              key={t.key}
+              href={`/raporty?${qs({ typ: t.key, sort: undefined, dir: undefined }).toString()}`}
+              className={`px-4 py-2 text-xs font-semibold uppercase tracking-wider transition ${
+                t.key === deliveryType ? "bg-plum text-cream" : "text-plum hover:bg-sand"
+              }`}
+            >
+              {t.label}
             </Link>
           ))}
         </div>

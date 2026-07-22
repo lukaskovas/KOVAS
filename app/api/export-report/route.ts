@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import {
+  getDeliveries,
   getDormant,
   getKpi,
   getOrdersBy,
@@ -108,6 +109,8 @@ export async function GET(request: Request) {
     country: clean("country"),
     agent: clean("agent"),
     ctype: clean("ctype"),
+    // Typ dokumentu dla raportu dostaw: domyślnie PZ (jak na ekranie), "all" = oba typy.
+    type: sp.get("typ") === "PW" ? "PW" : sp.get("typ") === "all" ? undefined : "PZ",
     q: clean("q"),
     sort: clean("sort"),
     dir: dirParam === "asc" || dirParam === "desc" ? dirParam : undefined,
@@ -162,6 +165,40 @@ export async function GET(request: Request) {
     } else if (report === "zakupy") {
       blocks = [block("Zakupy", def.columns!, await getPurchases(filters))];
       name = "raport-zakupy";
+    } else if (report === "dostawy") {
+      // Spłaszczamy do POZYCJI: jeden wiersz = jedna pozycja dostawy, kolumny dostawy powtórzone.
+      // W arkuszu łatwiej filtrować/sumować po SKU/marce niż w zagnieżdżonej strukturze z ekranu.
+      const deliveries = await getDeliveries(filters);
+      const columns: SheetColumn[] = [
+        { header: "Data", numeric: false },
+        { header: "Nr dostawy", numeric: false },
+        { header: "Typ", numeric: false },
+        { header: "Dostawca", numeric: false },
+        { header: "SKU", numeric: false },
+        { header: "Marka", numeric: false },
+        { header: "Nazwa towaru", numeric: false },
+        { header: "EAN", numeric: false },
+        { header: "Ilość", numeric: true, decimals: 2 },
+        { header: "Cena jedn. netto PLN", numeric: true, decimals: 2 },
+        { header: "Wartość netto PLN", numeric: true, decimals: 2 },
+      ];
+      const rows: unknown[][] = deliveries.flatMap((d) =>
+        d.items.map((it) => [
+          String(d.receipt_date).slice(0, 10),
+          d.doc_number,
+          d.doc_type,
+          d.supplier,
+          it.sku,
+          it.brand,
+          it.name,
+          it.ean,
+          it.qty,
+          it.unit_price,
+          it.value,
+        ]),
+      );
+      blocks = [{ title: "Dostawy", columns, rows }];
+      name = "raport-dostawy";
     } else {
       const dim = report === "okresy" ? period : def.dim!;
       blocks = [block(def.label, def.columns!, translate(dim, await getOrdersBy(dim, filters)))];

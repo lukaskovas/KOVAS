@@ -3,6 +3,7 @@ import {
   getOrdersBy,
   getProducts,
   getPurchases,
+  getDeliveries,
   getDormant,
   REPORT_BY_KEY,
   STRUCTURE_BLOCKS,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/analytics";
 import { matchLabel, orderStatusLabel, paymentLabel } from "@/lib/labels";
 import AnalyticsTable from "./analytics-table";
+import DeliveriesTable from "./deliveries-table";
 import { fmtMoney } from "@/lib/format";
 
 /**
@@ -201,6 +203,19 @@ export default async function AnalyticsView({
           <AnalyticsTable params={params} rows={rows} columns={def.columns ?? []} rank />
         </div>
         <Note>{def.hint}</Note>
+      </>
+    );
+  }
+
+  if (report === "dostawy") {
+    const deliveries = await getDeliveries(filters);
+    return (
+      <>
+        <DeliveriesTable rows={deliveries} params={params} />
+        <Note>
+          {def.hint}
+          {deliveries.length >= (filters.limit ?? 100) && " Lista jest ucięta do wybranej liczby pozycji - zmień ją w polu „Pokaż”."}
+        </Note>
       </>
     );
   }

@@ -142,6 +142,34 @@ export async function syncProducts(): Promise<ProductIndex> {
   return { unitCost, validIds };
 }
 
+/* ---- Brands ---- */
+
+type RawBrand = { id: number; name: string };
+
+/**
+ * Marki z Turis (/brands) -> tabela brands. products.brand_id to samo ID, ale bez nazwy;
+ * bez tej tabeli brand w raporcie dostaw byłby gołym numerem. Marek jest kilkadziesiąt - jedna strona.
+ */
+export async function syncBrands(): Promise<{ upserted: number }> {
+  const { upserted } = await logSync("turis_brands", async () => {
+    const { data } = await turisGet<RawBrand>("brands");
+    const rows = data.map((b) => ({
+      id: b.id,
+      name: b.name,
+      raw: b,
+      synced_at: new Date().toISOString(),
+    }));
+    let upserted = 0;
+    for (const batch of chunk(rows, 500)) {
+      const { error } = await supabaseAdmin().from("brands").upsert(batch);
+      if (error) throw new Error(`upsert brands: ${error.message}`);
+      upserted += batch.length;
+    }
+    return { seen: rows.length, upserted, failed: 0 };
+  });
+  return { upserted };
+}
+
 /* ---- Orders + order_items ---- */
 
 type RawOrderItem = {
