@@ -142,6 +142,34 @@ export async function syncProducts(): Promise<ProductIndex> {
   return { unitCost, validIds };
 }
 
+/* ---- Brands ---- */
+
+type RawBrand = { id: number; name: string };
+
+/**
+ * Marki z Turis (/brands) -> tabela brands. products.brand_id to samo ID, ale bez nazwy;
+ * bez tej tabeli brand w raporcie dostaw byłby gołym numerem. Marek jest kilkadziesiąt - jedna strona.
+ */
+export async function syncBrands(): Promise<{ upserted: number }> {
+  const { upserted } = await logSync("turis_brands", async () => {
+    const { data } = await turisGet<RawBrand>("brands");
+    const rows = data.map((b) => ({
+      id: b.id,
+      name: b.name,
+      raw: b,
+      synced_at: new Date().toISOString(),
+    }));
+    let upserted = 0;
+    for (const batch of chunk(rows, 500)) {
+      const { error } = await supabaseAdmin().from("brands").upsert(batch);
+      if (error) throw new Error(`upsert brands: ${error.message}`);
+      upserted += batch.length;
+    }
+    return { seen: rows.length, upserted, failed: 0 };
+  });
+  return { upserted };
+}
+
 /* ---- Orders + order_items ---- */
 
 type RawOrderItem = {
@@ -378,6 +406,85 @@ export async function syncOrdersDelta(
       })
       .eq("id", logRow?.id);
     return { seen, upserted, fromSec, toSec: nowSec };
+  } catch (err) {
+    await db
+      .from("sync_log")
+      .update({ finished_at: new Date().toISOString(), status: "failed", error_message: String(err) })
+      .eq("id", logRow?.id);
+    throw err;
+  }
+}
+
+// Statusy uznane za KOŃCOWE - zamówień w tych stanach nie odpytujemy już o zmiany.
+// "Shipped" traktujemy jak zamknięcie (u Kovas ~98% zamówień zostaje na "Shipped", a sprzedaż
+// po wysyłce jest finalna), "Completed" to jawne domknięcie. Wszystko inne = otwarte, śledzone.
+const TERMINAL_STATUSES = ["Shipped", "Completed"];
+
+/**
+ * Odświeża statusy OTWARTYCH zamówień - tych, które nie osiągnęły jeszcze stanu końcowego.
+ * Czyta ich id z naszej bazy, pobiera aktualny stan z Turis (GET /orders/:id) i zapisuje.
+ * Dzięki temu przejście "otwarte -> Shipped" łapiemy bez zepsutego endpointu orders/updated
+ * i bez webhooków. Zbiór otwartych jest mały (rząd dziesiątek), więc odpytanie po jednym jest tanie.
+ * Wołać po syncOrdersDelta - nowe zamówienia trafiają do bazy najpierw jako otwarte, potem tu są śledzone.
+ */
+export async function syncOpenOrders(
+  productIndex: ProductIndex,
+  validCompanyIds: Set<number>,
+  runType: "cron" | "manual" = "cron"
+) {
+  const db = supabaseAdmin();
+  const inList = `(${TERMINAL_STATUSES.map((s) => `"${s}"`).join(",")})`;
+
+  const { data: openRows, error: readErr } = await db
+    .from("orders")
+    .select("id")
+    .not("current_status_name", "in", inList);
+  if (readErr) throw new Error(`odczyt otwartych zamówień: ${readErr.message}`);
+  const ids = (openRows ?? []).map((r: { id: number }) => r.id);
+
+  const { data: logRow } = await db
+    .from("sync_log")
+    .insert({ source: "turis_orders_open_refresh", run_type: runType, status: "running", records_seen: ids.length })
+    .select("id")
+    .single();
+
+  try {
+    let upserted = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        const { data } = await turisGet<RawOrder>(`orders/${id}`);
+        // GET /orders/:id zwraca pojedynczy obiekt (turisGet typuje go jako tablicę - stąd rozróżnienie)
+        const o = (Array.isArray(data) ? data[0] : (data as unknown as RawOrder)) as RawOrder | undefined;
+        if (!o) {
+          failed++;
+          continue;
+        }
+        const { error: orderErr } = await db.from("orders").upsert(mapOrder(o, validCompanyIds));
+        if (orderErr) throw new Error(orderErr.message);
+        const itemRows = mapOrderItems(o, productIndex.validIds, productIndex.unitCost);
+        if (itemRows.length) {
+          const { error: itemErr } = await db.from("order_items").upsert(itemRows, { onConflict: "id" });
+          if (itemErr) throw new Error(itemErr.message);
+        }
+        upserted++;
+      } catch {
+        // pojedyncze zamówienie nie może wywrócić całego cyklu - liczymy błąd i idziemy dalej
+        failed++;
+      }
+    }
+
+    await db
+      .from("sync_log")
+      .update({
+        finished_at: new Date().toISOString(),
+        status: failed > 0 ? "partial" : "success",
+        records_seen: ids.length,
+        records_upserted: upserted,
+        records_failed: failed,
+      })
+      .eq("id", logRow?.id);
+    return { open: ids.length, upserted, failed };
   } catch (err) {
     await db
       .from("sync_log")

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { fmtMoney, fmtDate, txt } from "@/lib/format";
 import ColumnPicker, { isVisible, useColumnVisibility } from "./column-picker";
-import { matchLabel, orderStatusLabel } from "@/lib/labels";
+import { matchLabel, orderStatusLabel, realizationLabel } from "@/lib/labels";
 import type { Column, ReportView } from "@/lib/report-columns";
 
 export type Row = Record<string, unknown>;
@@ -19,7 +19,7 @@ function StatusBadge({ status, label }: { status: string | null; label: string }
   if (!status) return <span className="text-plum/25">-</span>;
   const s = status.toLowerCase();
   let cls = "bg-cream text-plum/70 ring-gold";
-  if (/(shipped|completed|complete|paid|done|zrealizow|opłac|wysłan|^matched$)/.test(s)) cls = "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  if (/(shipped|completed|complete|paid|invoiced|done|zrealizow|opłac|wysłan|^matched$)/.test(s)) cls = "bg-emerald-50 text-emerald-700 ring-emerald-200";
   else if (/(pending|new|await|oczek|nowe|processing|completing|ambiguous)/.test(s)) cls = "bg-amber-50 text-amber-700 ring-amber-200";
   else if (/(cancel|anulow|reject|error|błąd|failed|zwrot|unmatched|unparseable)/.test(s)) cls = "bg-rose-50 text-rose-700 ring-rose-200";
   return <span className={`inline-flex items-center px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${cls}`}>{label}</span>;
@@ -30,7 +30,10 @@ function renderCell(row: Row, col: Column) {
   switch (col.type) {
     case "status": {
       const raw = (v as string) ?? null;
-      const toLabel = col.key === "invoice_match_status" ? matchLabel : orderStatusLabel;
+      const toLabel =
+        col.key === "invoice_match_status" ? matchLabel
+        : col.key === "realization_status" ? realizationLabel
+        : orderStatusLabel;
       return <StatusBadge status={raw} label={toLabel(raw)} />;
     }
     case "money":
@@ -60,6 +63,7 @@ export default function TableClient({
   rows,
   params,
   note,
+  canEdit = false,
 }: {
   view: ReportView;
   columns: Column[];
@@ -67,9 +71,12 @@ export default function TableClient({
   /** Aktualne parametry URL - potrzebne, by link sortujący zachował filtry i wyszukiwanie. */
   params: Record<string, string | undefined>;
   note?: string;
+  /** Admin na widoku kontrahentów - dokładamy kolumnę "Akcje" z linkiem do edycji. */
+  canEdit?: boolean;
 }) {
   const [vis, setVis] = useColumnVisibility(view);
   const visible = columns.filter((c) => isVisible(c, vis));
+  const colCount = visible.length + (canEdit ? 1 : 0);
 
   function sortHref(sortKey: string) {
     const next = new URLSearchParams();
@@ -114,13 +121,18 @@ export default function TableClient({
                   </th>
                 );
               })}
+              {canEdit && (
+                <th className="font-display sticky top-0 z-10 whitespace-nowrap bg-cream px-3 py-3 text-right text-xs font-semibold uppercase tracking-wider text-plum">
+                  Akcje
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
             {visible.length === 0 ? (
               <tr><td className="px-4 py-16 text-center text-plum/40">Wszystkie kolumny ukryte - włącz je przyciskiem „Kolumny”</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={visible.length} className="px-4 py-16 text-center text-plum/40">Brak danych dla tych filtrów</td></tr>
+              <tr><td colSpan={colCount} className="px-4 py-16 text-center text-plum/40">Brak danych dla tych filtrów</td></tr>
             ) : (
               rows.map((r, i) => (
                 <tr key={i} className="border-b border-sand transition-colors last:border-0 hover:bg-cream">
@@ -129,6 +141,16 @@ export default function TableClient({
                       {renderCell(r, c)}
                     </td>
                   ))}
+                  {canEdit && (
+                    <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                      <Link
+                        href={`/admin/kontrahenci/${String(r.id)}`}
+                        className="text-xs uppercase tracking-wider text-plum underline hover:text-plum-light"
+                      >
+                        Edytuj
+                      </Link>
+                    </td>
+                  )}
                 </tr>
               ))
             )}

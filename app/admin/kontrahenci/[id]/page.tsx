@@ -34,7 +34,7 @@ export default async function EditContractorPage({
   return (
     <Shell active={null} user={admin}>
       <div className="mb-6 flex flex-wrap items-baseline gap-3">
-        <Link href="/admin/kontrahenci" className="text-xs uppercase tracking-wider text-plum underline">
+        <Link href="/?view=companies" className="text-xs uppercase tracking-wider text-plum underline">
           ← Kontrahenci
         </Link>
         <h1 className="font-display text-lg font-bold uppercase tracking-wider text-plum">

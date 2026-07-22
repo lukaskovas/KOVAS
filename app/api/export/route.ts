@@ -28,6 +28,7 @@ export async function GET(request: Request) {
     status: sp.get("status") ?? undefined,
     currency: sp.get("currency") ?? undefined,
     match: sp.get("match") ?? undefined,
+    realization: sp.get("realization") ?? undefined,
     country: sp.get("country") ?? undefined,
     agent: sp.get("agent") ?? undefined,
     ctype: sp.get("ctype") ?? undefined,

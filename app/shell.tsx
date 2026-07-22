@@ -42,14 +42,9 @@ export default function Shell({
             </Suspense>
             <div className="font-display flex items-center gap-4 text-xs uppercase tracking-wider">
               {user.role === "admin" && (
-                <>
-                  <Link href="/admin/kontrahenci" className="text-gold hover:text-cream">
-                    Edycja kontrahentów
-                  </Link>
-                  <Link href="/admin/uzytkownicy" className="text-gold hover:text-cream">
-                    Użytkownicy
-                  </Link>
-                </>
+                <Link href="/admin/uzytkownicy" className="text-gold hover:text-cream">
+                  Użytkownicy
+                </Link>
               )}
               <Link href="/konto" className="text-gold hover:text-cream">
                 {user.email}

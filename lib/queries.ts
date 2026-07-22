@@ -32,6 +32,8 @@ export type Filters = {
   status?: string;
   currency?: string;
   match?: string;
+  /** Status realizacji zamówienia (awaiting/invoiced/cancelled) - migracja 0021. */
+  realization?: string;
   country?: string;
   /** Handlowiec (opiekun kontrahenta) i typ kontrahenta - z kartoteki EASI, migracja 0011. */
   agent?: string;
@@ -49,7 +51,7 @@ type ViewConfig = {
   defaultSort: string;
   defaultDir: "asc" | "desc";
   /** Kolumny, na których wolno filtrować - klucz filtru -> kolumna w widoku. */
-  filterColumns: Partial<Record<"status" | "currency" | "match" | "country" | "agent" | "ctype" | "company", string>>;
+  filterColumns: Partial<Record<"status" | "currency" | "match" | "realization" | "country" | "agent" | "ctype" | "company", string>>;
 };
 
 const CONFIG: Record<ReportView, ViewConfig> = {
@@ -65,6 +67,7 @@ const CONFIG: Record<ReportView, ViewConfig> = {
     // w 0/10478 zamówień), "sales_agent" to opiekun z kartoteki EASI. Patrz migracja 0011.
     filterColumns: {
       status: "current_status_name", currency: "currency_code", match: "invoice_match_status",
+      realization: "realization_status",
       agent: "sales_agent", ctype: "contractor_type", company: "company_id",
     },
   },
@@ -104,7 +107,7 @@ function buildQuery(v: ReportView, f: Filters, select: string, count: boolean) {
     next.setUTCDate(next.getUTCDate() + 1);
     query = query.lt(cfg.dateColumn, next.toISOString().slice(0, 10));
   }
-  for (const key of ["status", "currency", "match", "country", "agent", "ctype", "company"] as const) {
+  for (const key of ["status", "currency", "match", "realization", "country", "agent", "ctype", "company"] as const) {
     const col = cfg.filterColumns[key];
     const val = f[key];
     if (col && val) query = query.eq(col, val);

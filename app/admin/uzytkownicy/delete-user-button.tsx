@@ -32,7 +32,7 @@ export default function DeleteUserButton({ id, email }: { id: string; email: str
             role="dialog"
             aria-modal="true"
             onMouseDown={(e) => e.stopPropagation()}
-            className="w-full max-w-md border-2 border-gold bg-cream shadow-xl"
+            className="w-full max-w-md border-2 border-gold bg-cream text-center shadow-xl"
           >
             <div className="border-b border-gold px-5 py-4">
               <h2 className="font-display text-sm font-semibold uppercase tracking-wider text-plum">
@@ -47,7 +47,7 @@ export default function DeleteUserButton({ id, email }: { id: string; email: str
               </p>
             </div>
 
-            <div className="flex justify-end gap-3 border-t border-gold px-5 py-4">
+            <div className="flex justify-center gap-3 border-t border-gold px-5 py-4">
               <button
                 type="button"
                 onClick={() => setConfirming(false)}

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { syncCompanies, syncProducts, syncOrdersDelta } from "@/lib/sync/turis";
-import { syncInvoices } from "@/lib/sync/wfirma";
+import { syncCompanies, syncProducts, syncOrdersDelta, syncOpenOrders } from "@/lib/sync/turis";
+import { syncInvoices, refreshRecentInvoices } from "@/lib/sync/wfirma";
 import { matchInvoicesToOrders } from "@/lib/sync/match-invoices";
 import { refreshReports } from "@/lib/sync/refresh-reports";
 
@@ -41,7 +41,14 @@ export async function GET(req: NextRequest) {
     const companies = await syncCompanies();
     const products = await syncProducts();
     const orders = await syncOrdersDelta(products, companies.validIds, "cron");
+    // Po dociągnięciu nowych zamówień odświeżamy statusy tych otwartych (nie Shipped/Completed) -
+    // łapie przejście "otwarte -> wysłane" bez zepsutego orders/updated i bez webhooków.
+    const openOrders = await syncOpenOrders(products, companies.validIds, "cron");
     const invoices = await syncInvoices();
+    // Douczanie istniejących faktur (okno 45 dni + stare nieopłacone) - bramkowane do ~raz/dobę
+    // wewnątrz funkcji, więc tu wołamy co cykl bez obawy o limit API. Przed matcherem, żeby
+    // dopasowanie kwot widziało odświeżone totale.
+    const invoicesRefresh = await refreshRecentInvoices();
     const matched = await matchInvoicesToOrders();
     const refreshMs = await refreshReports();
 
@@ -50,7 +57,9 @@ export async function GET(req: NextRequest) {
       companies: companies.upserted,
       products: products.validIds.size,
       orders: { seen: orders.seen, upserted: orders.upserted, from: orders.fromSec, to: orders.toSec },
+      openOrders,
       invoices: { upserted: invoices.upserted, partial: invoices.partial },
+      invoicesRefresh,
       matched,
       refreshMs,
       totalMs: Date.now() - startedAt,

@@ -3,6 +3,7 @@ import {
   getOrdersBy,
   getProducts,
   getPurchases,
+  getDeliveries,
   getDormant,
   REPORT_BY_KEY,
   STRUCTURE_BLOCKS,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/analytics";
 import { matchLabel, orderStatusLabel, paymentLabel } from "@/lib/labels";
 import AnalyticsTable from "./analytics-table";
+import DeliveriesTable from "./deliveries-table";
 import { fmtMoney } from "@/lib/format";
 
 /**
@@ -166,9 +168,9 @@ export default async function AnalyticsView({
         <Note>
           Dane od {String(kpi.first_order).slice(0, 10)} do {String(kpi.last_order).slice(0, 10)}. Średnio{" "}
           {Number(kpi.avg_items_per_order).toLocaleString("pl-PL")} szt. na zamówienie. Kwoty przeliczone na PLN kursem
-          NBP z dnia poprzedzającego zamówienie. CoGS pochodzi z dokumentów przyjęć wFirma, liczony metodą EASI
-          (cena z pierwszego przyjęcia towaru) - koszt jest więc zamrożony na kwietniu 2026 i nie odzwierciedla
-          zmian cen zakupu w czasie. Kwota VAT celowo nie jest pokazywana jako wskaźnik: Turis wypełnia ją także
+          NBP z dnia poprzedzającego zamówienie. CoGS to realny koszt własny z wydań magazynowych wFirma (WZ) -
+          koszt faktycznie zdjęty z magazynu przy sprzedaży. Znamy go dla ery wFirmy (od 04.2026); starsze
+          zamówienia nie mają wydania WZ, więc marża ich nie obejmuje. Kwota VAT celowo nie jest pokazywana jako wskaźnik: Turis wypełnia ją także
           dla eksportu z odwrotnym obciążeniem, gdzie podatku nie naliczono (docs/analiza-easi/LUKI-DANYCH.md).
         </Note>
       </>
@@ -201,6 +203,19 @@ export default async function AnalyticsView({
           <AnalyticsTable params={params} rows={rows} columns={def.columns ?? []} rank />
         </div>
         <Note>{def.hint}</Note>
+      </>
+    );
+  }
+
+  if (report === "dostawy") {
+    const deliveries = await getDeliveries(filters);
+    return (
+      <>
+        <DeliveriesTable rows={deliveries} params={params} />
+        <Note>
+          {def.hint}
+          {deliveries.length >= (filters.limit ?? 100) && " Lista jest ucięta do wybranej liczby pozycji - zmień ją w polu „Pokaż”."}
+        </Note>
       </>
     );
   }

@@ -4,6 +4,7 @@ import { getKpi, type Kpi } from "@/lib/analytics";
 import { COLUMNS, type ReportView } from "@/lib/report-columns";
 import TableClient, { type Row } from "./table-client";
 import FiltersBar from "./filters";
+import AddContractorPanel from "./admin/kontrahenci/add-contractor-panel";
 import { fmtMoney } from "@/lib/format";
 
 export type View = ReportView;
@@ -44,6 +45,7 @@ function Pager({ view, current, last, params }: { view: ReportView; current: num
 function Totals({ kpi }: { kpi: Kpi | null }) {
   if (!kpi || !Number(kpi.orders_count)) return null;
   const missingRate = Number(kpi.missing_rate_count) || 0;
+  const missingCost = Number(kpi.missing_cost_count) || 0;
   const items: [string, number][] = [
     ["Przychód netto PLN", Number(kpi.net_pln)],
     ["Przychód brutto PLN", Number(kpi.gross_pln)],
@@ -58,6 +60,13 @@ function Totals({ kpi }: { kpi: Kpi | null }) {
           <div className="mt-1 text-lg font-semibold tabular-nums text-plum-dark">{fmtMoney(val)}</div>
         </div>
       ))}
+      {missingCost > 0 && (
+        <div className="col-span-2 text-xs text-amber-700 sm:col-span-4">
+          Uwaga: CoGS i Marża obejmują tylko zamówienia z policzonym kosztem. {missingCost} zamówień
+          nie ma kosztu (brak wydania WZ z wFirmy - zwykle sprzedaż sprzed wdrożenia wFirmy) i nie
+          wchodzi do marży.
+        </div>
+      )}
       {missingRate > 0 && (
         <div className="col-span-2 text-xs text-amber-700 sm:col-span-4">
           Uwaga: {missingRate} zamówień nie ma kursu NBP na swoją datę i nie weszło do sum.
@@ -73,11 +82,13 @@ export default async function ViewData({
   page,
   filters,
   params,
+  isAdmin,
 }: {
   view: ReportView;
   page: number;
   filters: Filters;
   params: Record<string, string | undefined>;
+  isAdmin: boolean;
 }) {
   // Wszystkie trzy zapytania równolegle. Sumy szły wcześniej osobnym komponentem
   // renderowanym dopiero po tabeli, więc ich czas doklejał się do czasu tabeli zamiast
@@ -92,19 +103,22 @@ export default async function ViewData({
 
   const note =
     view === "orders" || view === "products"
-      ? "CoGS pochodzi z dokumentów przyjęć wFirma (Turis nie ma cen kosztowych). Koszt liczony metodą EASI - cena z pierwszego przyjęcia towaru - żeby dało się porównać liczby 1:1 z ich raportem; docelowa metoda do zatwierdzenia. 71 produktów nie ma kosztu (brak przyjęcia w wFirmie), więc pokazują marżę 100% (patrz docs/analiza-easi/LUKI-DANYCH.md)."
+      ? "CoGS to realny koszt własny z dokumentów wydania wFirma (WZ) - koszt faktycznie zdjęty z magazynu przy danej sprzedaży, dowiązany przez fakturę. Znamy go dla ery wFirmy (od 04.2026); zamówienia sprzed wdrożenia wFirmy nie mają wydania WZ, więc CoGS i marża są dla nich puste (\"-\") zamiast mylącego 100%. Marża liczona bez transportu (patrz docs/analiza-easi/LUKI-DANYCH.md)."
       : undefined;
 
   return (
     <>
       {view === "orders" && <Totals kpi={kpi} />}
+      {view === "companies" && isAdmin && (
+        <AddContractorPanel agents={options.agents} ctypes={options.ctypes} />
+      )}
       <div className="mb-4 flex items-baseline gap-2">
         <span className="font-display text-2xl font-bold tabular-nums text-plum-dark">{total.toLocaleString("pl-PL")}</span>
         <span className="text-sm text-plum/60">{LABELS[view]}</span>
       </div>
       <div className="overflow-hidden border border-gold bg-white">
         <FiltersBar view={view} active={params} options={options} contractors={contractors} total={total} />
-        <TableClient view={view} columns={COLUMNS[view]} rows={data} params={params} note={note} />
+        <TableClient view={view} columns={COLUMNS[view]} rows={data} params={params} note={note} canEdit={view === "companies" && isAdmin} />
         <Pager view={view} current={page} last={lastPage} params={params} />
       </div>
     </>

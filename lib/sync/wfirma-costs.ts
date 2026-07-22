@@ -1,6 +1,6 @@
 import "server-only";
 import { Client } from "pg";
-import { findGoodsPage, findWarehouseDocsPage, unwrapDocContents, WfirmaRateLimitError } from "@/lib/wfirma";
+import { findContractorById, findGoodsPage, findWarehouseDocsPage, unwrapDocContents, WfirmaRateLimitError } from "@/lib/wfirma";
 import { supabaseAdmin, fetchAll } from "@/lib/supabase";
 
 /**
@@ -83,6 +83,29 @@ export function toLayerRows(doc: Record<string, unknown>) {
 }
 
 /**
+ * Nagłówek dokumentu przyjęcia -> wiersz wfirma_receipt_docs. Pozycje zostają w warstwach
+ * (toLayerRows); tu bierzemy to, czego w warstwach nie ma: dostawcę (contractor.id) i wartość
+ * dokumentu. `raw` zapisujemy BEZ pozycji - te są już w warstwach, nie dublujemy.
+ */
+export function toReceiptDocRow(doc: Record<string, unknown>) {
+  const { warehouse_document_contents: _contents, ...header } = doc;
+  const contractorId = Number((doc.contractor as { id?: unknown } | undefined)?.id ?? 0) || null;
+  return {
+    doc_id: Number(doc.id),
+    doc_number: String(doc.fullnumber ?? ""),
+    doc_type: String(doc.type ?? ""),
+    receipt_date: String(doc.date ?? ""),
+    contractor_id: contractorId,
+    netto: doc.netto != null && doc.netto !== "" ? Number(doc.netto) : null,
+    brutto: doc.brutto != null && doc.brutto !== "" ? Number(doc.brutto) : null,
+    currency: emptyToNull(doc.currency),
+    received: emptyToNull(doc.received),
+    raw: header,
+    synced_at: new Date().toISOString(),
+  };
+}
+
+/**
  * Surowe wydanie WZ -> wiersze wfirma_issue_lines (po jednym na pozycję).
  *
  * To jest ŹRÓDŁO REALNEGO KOSZTU: purchase_expense = koszt własny wydanego towaru, który wFirma
@@ -145,24 +168,69 @@ export async function syncGoods(): Promise<{ upserted: number; partial: boolean 
  */
 export async function syncReceiptLayers(): Promise<{ docs: number; layers: number; partial: boolean }> {
   const db = supabaseAdmin();
-  let docs = 0;
+  const headers: Record<string, unknown>[] = [];
   const layers: Record<string, unknown>[] = [];
 
   for (const type of ["PW", "PZ"] as const) {
     for (let page = 1; ; page++) {
       const rows = await withRetry(() => findWarehouseDocsPage(type, page, PAGE_SIZE));
-      if (rows === null) return { docs, layers: layers.length, partial: true };
+      if (rows === null) return { docs: headers.length, layers: layers.length, partial: true };
       if (rows.length === 0) break;
 
-      docs += rows.length;
-      for (const doc of rows) layers.push(...toLayerRows(doc));
+      for (const doc of rows) {
+        headers.push(toReceiptDocRow(doc));
+        layers.push(...toLayerRows(doc));
+      }
       if (rows.length < PAGE_SIZE) break;
     }
   }
 
+  // Nagłówki (dostawca, wartość dostawy) do raportu dostaw - obok warstw kosztowych.
+  const { error: hErr } = await db.from("wfirma_receipt_docs").upsert(headers);
+  if (hErr) throw new Error(`upsert wfirma_receipt_docs: ${hErr.message}`);
+
   const { error } = await db.from("wfirma_receipt_layers").upsert(layers);
   if (error) throw new Error(`upsert wfirma_receipt_layers: ${error.message}`);
-  return { docs, layers: layers.length, partial: false };
+  return { docs: headers.length, layers: layers.length, partial: false };
+}
+
+/**
+ * Nazwy dostawców z wFirma - tylko dla kontrahentów występujących na przyjęciach (wfirma_receipt_docs).
+ * Nagłówek PZ niesie sam contractor.id; tu dobieramy nazwę i NIP. Dostawców jest garść, więc pobór
+ * per ID mieści się w limicie API. Wołać PO syncReceiptLayers (potrzebuje zapisanych nagłówków).
+ */
+export async function syncReceiptContractors(): Promise<{ fetched: number; partial: boolean }> {
+  const db = supabaseAdmin();
+  const docs = await fetchAll<{ contractor_id: number | null }>("wfirma_receipt_docs", "contractor_id");
+  const ids = [...new Set(docs.map((d) => d.contractor_id).filter((x): x is number => !!x && x !== 0))];
+
+  const rows: Record<string, unknown>[] = [];
+  for (const id of ids) {
+    const res = await withRetry(() => findContractorById(id));
+    if (res === null) {
+      // limit API dalej trzyma - zapisz, co zdążyliśmy, i zgłoś niepełność
+      if (rows.length) {
+        const { error } = await db.from("wfirma_contractors").upsert(rows);
+        if (error) throw new Error(`upsert wfirma_contractors: ${error.message}`);
+      }
+      return { fetched: rows.length, partial: true };
+    }
+    const c = res[0];
+    if (!c) continue; // kontrahent usunięty z wFirma - w raporcie zostanie fallback "(dostawca ID)"
+    rows.push({
+      id,
+      name: String(c.name ?? c.altname ?? "") || `(kontrahent ${id})`,
+      nip: emptyToNull(c.nip),
+      raw: c,
+      synced_at: new Date().toISOString(),
+    });
+  }
+
+  if (rows.length) {
+    const { error } = await db.from("wfirma_contractors").upsert(rows);
+    if (error) throw new Error(`upsert wfirma_contractors: ${error.message}`);
+  }
+  return { fetched: rows.length, partial: false };
 }
 
 /**

@@ -63,6 +63,7 @@ export async function createContractor(_prev: string | null, formData: FormData)
 
   await refreshQuiet();
   revalidatePath(PATH);
+  revalidatePath("/");
   return "OK";
 }
 
@@ -81,5 +82,6 @@ export async function updateContractor(_prev: string | null, formData: FormData)
   await refreshQuiet();
   revalidatePath(PATH);
   revalidatePath(`${PATH}/${id}`);
+  revalidatePath("/");
   return "OK";
 }

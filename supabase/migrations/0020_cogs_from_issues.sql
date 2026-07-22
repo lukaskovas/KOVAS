@@ -21,6 +21,12 @@
 -- usuwana - products.unit_cost i widok pokrycia v_cost_coverage dalej z niej korzystają jako
 -- materiał porównawczy. Przestaje tylko zasilać marżę w raportach.
 
+-- Migracja kończy się `refresh materialized view mv_report_orders`. Na tej bazie refresh potrafił
+-- oberwać o statement_timeout (znana pułapka - patrz notatki projektu). Runner (scripts/migrate.ts)
+-- owija całość w transakcję, więc zdejmujemy limit na czas TEJ migracji (set local = tylko ta
+-- transakcja, nie globalnie).
+set local statement_timeout = 0;
+
 -- ============================================================
 -- wfirma_issue_lines - pozycje wydań WZ (realny koszt własny per sprzedaż)
 -- ============================================================
@@ -244,13 +250,15 @@ language sql stable as $$
     round(coalesce(sum(f.gross_pln), 0), 2),
     round(coalesce(sum(f.vat_pln), 0), 2),
     round(coalesce(sum(f.discount_pln), 0), 2),
-    -- CoGS: suma po zamówieniach z policzonym kosztem (NULL nie wchodzi do sum()).
-    round(coalesce(sum(f.cogs_total), 0), 2),
-    -- Marża: liczona TYLKO na zamówieniach z policzonym kosztem, inaczej zawyżałyby ją
-    -- zamówienia bez kosztu (przychód jest, CoGS 0). Przychód i transport też tylko z tych zamówień.
-    round(coalesce(sum(f.net_pln) filter (where f.cogs_total is not null), 0)
-          - coalesce(sum(round(coalesce(f.shipping_price, 0) * f.rate_pln, 2)) filter (where f.cogs_total is not null), 0)
-          - coalesce(sum(f.cogs_total), 0), 2),
+    -- CoGS: suma po zamówieniach objętych marżą (koszt znany I jest kurs, więc net_pln policzone).
+    -- To samo źródło co marża niżej, żeby kafelki CoGS i Marża opisywały ten sam zbiór zamówień.
+    round(coalesce(sum(f.cogs_total) filter (where f.net_pln is not null), 0), 2),
+    -- Marża: liczona TYLKO na zamówieniach z policzonym kosztem, inaczej zawyżałyby ją zamówienia
+    -- bez kosztu (przychód jest, CoGS 0). Warunek net_pln is not null == ten sam, przy którym marża
+    -- per-zamówienie w v_orders_report jest niepusta (obca waluta bez kursu NBP -> net_pln i marża NULL).
+    round(coalesce(sum(f.net_pln) filter (where f.cogs_total is not null and f.net_pln is not null), 0)
+          - coalesce(sum(round(coalesce(f.shipping_price, 0) * f.rate_pln, 2)) filter (where f.cogs_total is not null and f.net_pln is not null), 0)
+          - coalesce(sum(f.cogs_total) filter (where f.net_pln is not null), 0), 2),
     round(coalesce(sum(f.net_pln), 0) / nullif(count(*), 0), 2),
     round(coalesce(sum(f.qty), 0) / nullif(count(*), 0), 1),
     min(f.turis_created_at)::date,
@@ -260,6 +268,10 @@ language sql stable as $$
     count(*) filter (where f.cogs_total is null and f.net_pln is not null)
   from f;
 $$;
+
+-- Drop skasował grant z migracji 0016 - odtwarzamy (te same typy argumentów, zmieniły się tylko
+-- kolumny zwracane).
+grant execute on function report_kpi(date, date, text, text, text, text, text, text, text, bigint) to service_role;
 
 -- ============================================================
 -- 4. report_orders_by - marża/CoGS w raportach zbiorczych, NULL-aware jak w KPI.
@@ -373,11 +385,12 @@ begin
         round(coalesce(sum(o.gross_pln), 0), 2)                     as gross_pln,
         round(coalesce(sum(o.vat_pln), 0), 2)                       as vat_pln,
         round(coalesce(sum(o.discount_pln), 0), 2)                  as discount_pln,
-        -- CoGS/marża tylko z zamówień z policzonym kosztem; NULL (grupa bez kosztu) -> "-" w UI.
-        round(sum(o.cogs_total) filter (where o.cogs_total is not null), 2) as cogs_pln,
-        round(sum(o.net_pln) filter (where o.cogs_total is not null)
-              - sum(round(coalesce(o.shipping_price, 0) * o.rate_pln, 2)) filter (where o.cogs_total is not null)
-              - sum(o.cogs_total) filter (where o.cogs_total is not null), 2) as margin_pln,
+        -- CoGS/marża tylko z zamówień objętych marżą (koszt znany I policzony net_pln); grupa
+        -- bez takich zamówień -> filter daje NULL -> "-" w UI. Warunek jak w KPI i w marży per-zamówienie.
+        round(sum(o.cogs_total) filter (where o.cogs_total is not null and o.net_pln is not null), 2) as cogs_pln,
+        round(sum(o.net_pln) filter (where o.cogs_total is not null and o.net_pln is not null)
+              - sum(round(coalesce(o.shipping_price, 0) * o.rate_pln, 2)) filter (where o.cogs_total is not null and o.net_pln is not null)
+              - sum(o.cogs_total) filter (where o.cogs_total is not null and o.net_pln is not null), 2) as margin_pln,
         round(coalesce(sum(o.net_pln), 0) / nullif(count(*), 0), 2) as avg_order_pln,
         min(o.turis_created_at)::date                               as first_order,
         max(o.turis_created_at)::date                               as last_order

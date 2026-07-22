@@ -26,6 +26,7 @@ export type ReportView = "orders" | "products" | "companies";
 export const ORDER_COLUMNS: Column[] = [
   { key: "display_order_number", header: "Nr zamówienia", type: "strong", sortKey: "display_order_number" },
   { key: "invoice_fullnumber", header: "Nr faktury", type: "mono", sortKey: "invoice_fullnumber" },
+  { key: "realization_status", header: "Realizacja", type: "status", sortKey: "realization_status" },
   { key: "company_name", header: "Kontrahent", type: "text", grow: true, sortKey: "company_name" },
   { key: "vat_number", header: "NIP", type: "mono", sortKey: "vat_number" },
   { key: "country_code", header: "Kraj", type: "text", optional: true },

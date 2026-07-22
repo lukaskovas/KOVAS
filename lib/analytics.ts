@@ -24,6 +24,8 @@ export type AnalyticsFilters = {
   ctype?: string;
   /** Konkretny kontrahent po company_id - tylko KPI zamówień (migracja 0014). */
   company?: string;
+  /** Typ dokumentu magazynowego dla raportu dostaw: "PZ" | "PW" | undefined (oba). */
+  type?: string;
   q?: string;
   sort?: string;
   dir?: "asc" | "desc";
@@ -99,6 +101,8 @@ export type Kpi = {
   last_order: string | null;
   /** Zamówienia bez kursu NBP na swoją datę - wypadły z sum (migracja 0009). */
   missing_rate_count: number;
+  /** Zamówienia bez policzonego kosztu (brak WZ z wFirmy) - nie obejmuje ich marża (migracja 0020). */
+  missing_cost_count: number;
 };
 
 export async function getKpi(f: AnalyticsFilters): Promise<Kpi | null> {
@@ -172,6 +176,57 @@ export async function getPurchases(f: AnalyticsFilters): Promise<AggRow[]> {
 }
 
 // ============================================================
+// Raport dostaw (migracja 0025) - ruchy magazynowe PZ/PW per dokument, z rozbiciem na pozycje.
+// Inny kształt niż AggRow (nagłówek dostawy + zagnieżdżone pozycje), więc własne typy i funkcja.
+// ============================================================
+
+export type DeliveryItem = {
+  sku: string | null;
+  brand: string | null;
+  name: string | null;
+  ean: string | null;
+  qty: number;
+  unit_price: number;
+  value: number;
+};
+
+export type DeliveryDoc = {
+  doc_id: number;
+  doc_number: string;
+  doc_type: string;
+  receipt_date: string;
+  supplier: string | null;
+  items_count: number;
+  items_qty: number;
+  net_pln: number;
+  share_pct: number | null;
+  items: DeliveryItem[];
+};
+
+/**
+ * Dostawy per dokument PZ/PW - z przyjęć magazynowych wFirma (migracje 0012/0024/0025).
+ * Filtry: zakres daty przyjęcia, typ dokumentu (PZ/PW/oba) i wyszukiwanie (dostawca, SKU, brand,
+ * nazwa, nr dostawy). Filtry sprzedażowe (waluta/status/handlowiec) tu nie mają sensu - SQL je ignoruje.
+ */
+export async function getDeliveries(f: AnalyticsFilters): Promise<DeliveryDoc[]> {
+  const limit = f.limit ?? 100;
+  const needle = f.q?.trim().replace(/[%_,()]/g, "") || null;
+  return rpc<DeliveryDoc>(
+    "report_deliveries",
+    {
+      p_from: f.from ?? null,
+      p_to: f.to ?? null,
+      p_type: f.type ?? null,
+      p_q: needle,
+      p_sort: f.sort ?? null,
+      p_dir: f.dir ?? null,
+      p_limit: limit,
+    },
+    limit,
+  );
+}
+
+// ============================================================
 // Definicje raportów - jedno źródło prawdy dla ekranu i eksportu CSV,
 // tak samo jak lib/report-columns.ts dla raportów szczegółowych.
 // ============================================================
@@ -199,7 +254,7 @@ const COL = {
 } satisfies Record<string, AggColumn>;
 
 export type ReportKey =
-  | "podsumowanie" | "handlowcy" | "kontrahenci" | "produkty" | "zakupy" | "okresy" | "kraje" | "struktura" | "uspieni";
+  | "podsumowanie" | "handlowcy" | "kontrahenci" | "produkty" | "zakupy" | "dostawy" | "okresy" | "kraje" | "struktura" | "uspieni";
 
 export type ReportDef = {
   key: ReportKey;
@@ -287,6 +342,18 @@ export const REPORTS: ReportDef[] = [
       { key: "first_order", header: "Pierwsze przyjęcie", type: "date", sort: "first" },
       { key: "last_order", header: "Ostatnie przyjęcie", type: "date", sort: "last" },
     ],
+  },
+  {
+    key: "dostawy",
+    label: "Dostawy",
+    hint:
+      "Ruchy magazynowe per DOSTAWA (dokument przyjęcia wFirma). Domyślnie przyjęcia zewnętrzne (PZ) - " +
+      "co, ile, po jakiej cenie i którego towaru (SKU + marka) przyjechało. Kliknij wiersz, żeby rozwinąć " +
+      "pozycje dostawy. Przełącznik nad tabelą zmienia typ dokumentu (PZ / PW / oba). Marka pochodzi z Turis " +
+      "przez dopasowanie towaru do produktu - towar bez dopasowanego produktu wyjdzie bez marki. Dostawca to " +
+      "kontrahent z nagłówka przyjęcia. Kwoty w PLN netto. Filtruje się zakresem daty przyjęcia i wyszukiwaniem " +
+      "(dostawca, SKU, marka, nazwa, nr dostawy); filtry sprzedażowe (waluta/status/handlowiec) tu nie działają.",
+    // Kolumny renderuje własny komponent (rozwijane dostawy), nie generyczna tabela agregatów.
   },
   {
     key: "okresy",
