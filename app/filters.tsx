@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { FilterOptions, ContractorOption } from "@/lib/queries";
 import type { ReportView } from "@/lib/report-columns";
 import Dropdown from "./dropdown";
+import DatePicker from "./date-picker";
 import { matchLabel, orderStatusLabel } from "@/lib/labels";
 
 /**
@@ -101,14 +102,14 @@ export default function Filters({
           <>
             {view !== "companies" && (
               <>
-                <label className="flex items-center gap-1.5 text-sm text-plum/60">
+                <span className="flex items-center gap-1.5 text-sm text-plum/60">
                   od
-                  <input type="date" name="from" defaultValue={active.from} className={inputCls} />
-                </label>
-                <label className="flex items-center gap-1.5 text-sm text-plum/60">
+                  <DatePicker name="from" value={active.from} placeholder="od" />
+                </span>
+                <span className="flex items-center gap-1.5 text-sm text-plum/60">
                   do
-                  <input type="date" name="to" defaultValue={active.to} className={inputCls} />
-                </label>
+                  <DatePicker name="to" value={active.to} placeholder="do" />
+                </span>
                 <Select name="currency" value={active.currency} label="Waluta" options={options.currencies} />
               </>
             )}

@@ -2,6 +2,7 @@
 
 import type { FilterOptions } from "@/lib/queries";
 import Dropdown from "./dropdown";
+import DatePicker from "./date-picker";
 import { orderStatusLabel } from "@/lib/labels";
 
 /**
@@ -60,14 +61,14 @@ export default function AnalyticsFilters({
         {Object.entries(hidden).map(([k, v]) => v && <input key={k} type="hidden" name={k} value={v} />)}
 
         <input name="q" defaultValue={active.q} placeholder="Szukaj kontrahenta / nr zamówienia..." className={`${inputCls} w-64`} />
-        <label className="flex items-center gap-1.5 text-sm text-plum/60">
+        <span className="flex items-center gap-1.5 text-sm text-plum/60">
           od
-          <input type="date" name="from" defaultValue={active.from} className={inputCls} />
-        </label>
-        <label className="flex items-center gap-1.5 text-sm text-plum/60">
+          <DatePicker name="from" value={active.from} placeholder="od" />
+        </span>
+        <span className="flex items-center gap-1.5 text-sm text-plum/60">
           do
-          <input type="date" name="to" defaultValue={active.to} className={inputCls} />
-        </label>
+          <DatePicker name="to" value={active.to} placeholder="do" />
+        </span>
 
         <Dropdown name="currency" value={active.currency} placeholder="Waluta: wszystkie" options={options.currencies.map((o) => ({ value: o, label: o }))} />
         <Dropdown

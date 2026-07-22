@@ -57,6 +57,7 @@ export default function NewUserForm() {
               placeholder="Rola"
               options={ROLE_OPTIONS}
               includeEmpty={false}
+              fullWidth
             />
           </div>
         </label>
