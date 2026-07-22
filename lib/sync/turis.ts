@@ -14,6 +14,28 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+// Czy błąd jest PRZEJŚCIOWY (zerwane połączenie, chwilowy 5xx, timeout) - takie warto ponowić.
+// Błąd trwały (4xx, HTTP 500 na konkretnym rekordzie, błąd danych) ponawiać nie ma sensu.
+function isTransient(err: unknown): boolean {
+  return /fetch failed|network|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket|EAI_AGAIN|HTTP 50[234]|HTTP 429/i.test(String(err));
+}
+
+// Ponawia operację sieciową przy błędzie przejściowym (backoff 0.5s/1s/2s). Backfill przechodzi
+// ~700 stron przez ~30 min - pojedynczy "fetch failed" do Supabase/Turis nie może wywrócić całego
+// przebiegu. Zachowuje etykietę w komunikacie, żeby sync_log dalej pokazywał, na czym poległo.
+async function withRetry<T>(label: string, fn: () => Promise<T>, tries = 4): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= tries || !isTransient(err)) {
+        throw new Error(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+    }
+  }
+}
+
 async function logSync(source: string, fn: () => Promise<{ seen: number; upserted: number; failed: number }>) {
   const db = supabaseAdmin();
   const { data: logRow } = await db
@@ -296,19 +318,26 @@ export async function syncAllOrders(
     let page = 1;
     let lastPage = 1;
     do {
-      const { data, meta } = await turisGet<RawOrder>("orders", { page });
+      // Pobranie i zapisy owinięte w retry - przy ~700 stronach pojedynczy zryw sieci nie może
+      // ubić całego backfillu (patrz withRetry). Kolejność zapisu: orders (FK) przed order_items.
+      const { data, meta } = await withRetry(`Turis orders (strona ${page})`, () =>
+        turisGet<RawOrder>("orders", { page })
+      );
       lastPage = meta?.last_page ?? page;
       seen += data.length;
 
       const orderRows = data.map((o) => mapOrder(o, validCompanyIds));
       const itemRows = data.flatMap((o) => mapOrderItems(o, productIndex.validIds, productIndex.unitCost));
 
-      // najpierw orders (FK dla order_items), potem order_items
-      const { error: orderErr } = await supabaseAdmin().from("orders").upsert(orderRows);
-      if (orderErr) throw new Error(`upsert orders (strona ${page}): ${orderErr.message}`);
+      await withRetry(`upsert orders (strona ${page})`, async () => {
+        const { error } = await supabaseAdmin().from("orders").upsert(orderRows);
+        if (error) throw new Error(error.message);
+      });
       if (itemRows.length) {
-        const { error: itemErr } = await supabaseAdmin().from("order_items").upsert(itemRows, { onConflict: "id" });
-        if (itemErr) throw new Error(`upsert order_items (strona ${page}): ${itemErr.message}`);
+        await withRetry(`upsert order_items (strona ${page})`, async () => {
+          const { error } = await supabaseAdmin().from("order_items").upsert(itemRows, { onConflict: "id" });
+          if (error) throw new Error(error.message);
+        });
       }
       upserted += orderRows.length;
       onProgress?.(page, lastPage);
