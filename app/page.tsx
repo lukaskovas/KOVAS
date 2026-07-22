@@ -7,7 +7,7 @@ import { requireUser } from "@/lib/auth";
 type SearchParams = {
   view?: string; page?: string; q?: string; from?: string; to?: string;
   status?: string; currency?: string; match?: string; country?: string;
-  agent?: string; ctype?: string; sort?: string; dir?: string;
+  agent?: string; ctype?: string; company?: string; sort?: string; dir?: string;
 };
 
 export default async function Home({ searchParams }: { searchParams: Promise<SearchParams> }) {
@@ -28,6 +28,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
     country: clean(sp.country),
     agent: clean(sp.agent),
     ctype: clean(sp.ctype),
+    company: clean(sp.company),
     sort: clean(sp.sort),
     dir,
   };

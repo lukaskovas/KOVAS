@@ -31,6 +31,7 @@ export async function GET(request: Request) {
     country: sp.get("country") ?? undefined,
     agent: sp.get("agent") ?? undefined,
     ctype: sp.get("ctype") ?? undefined,
+    company: sp.get("company") ?? undefined,
     sort: sp.get("sort") ?? undefined,
     dir: dirParam === "asc" || dirParam === "desc" ? dirParam : undefined,
   };

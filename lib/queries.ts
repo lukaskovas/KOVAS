@@ -36,6 +36,8 @@ export type Filters = {
   /** Handlowiec (opiekun kontrahenta) i typ kontrahenta - z kartoteki EASI, migracja 0011. */
   agent?: string;
   ctype?: string;
+  /** Konkretny kontrahent po stabilnym company_id (migracja 0014) - dotyczy tylko zamówień. */
+  company?: string;
   sort?: string;
   dir?: "asc" | "desc";
 };
@@ -47,7 +49,7 @@ type ViewConfig = {
   defaultSort: string;
   defaultDir: "asc" | "desc";
   /** Kolumny, na których wolno filtrować - klucz filtru -> kolumna w widoku. */
-  filterColumns: Partial<Record<"status" | "currency" | "match" | "country" | "agent" | "ctype", string>>;
+  filterColumns: Partial<Record<"status" | "currency" | "match" | "country" | "agent" | "ctype" | "company", string>>;
 };
 
 const CONFIG: Record<ReportView, ViewConfig> = {
@@ -63,7 +65,7 @@ const CONFIG: Record<ReportView, ViewConfig> = {
     // w 0/10478 zamówień), "sales_agent" to opiekun z kartoteki EASI. Patrz migracja 0011.
     filterColumns: {
       status: "current_status_name", currency: "currency_code", match: "invoice_match_status",
-      agent: "sales_agent", ctype: "contractor_type",
+      agent: "sales_agent", ctype: "contractor_type", company: "company_id",
     },
   },
   products: {
@@ -102,7 +104,7 @@ function buildQuery(v: ReportView, f: Filters, select: string, count: boolean) {
     next.setUTCDate(next.getUTCDate() + 1);
     query = query.lt(cfg.dateColumn, next.toISOString().slice(0, 10));
   }
-  for (const key of ["status", "currency", "match", "country", "agent", "ctype"] as const) {
+  for (const key of ["status", "currency", "match", "country", "agent", "ctype", "company"] as const) {
     const col = cfg.filterColumns[key];
     const val = f[key];
     if (col && val) query = query.eq(col, val);
@@ -226,6 +228,29 @@ async function fetchFilterOptions(): Promise<FilterOptions> {
     agents: of("agent"),
     ctypes: of("ctype"),
   };
+}
+
+/** Kontrahent do wyszukiwarki filtra zamówień - id (stabilny klucz) + nazwa do pokazania. */
+export type ContractorOption = { id: number; name: string };
+
+/**
+ * Lista kontrahentów mających zamówienia (widok v_order_contractors, migracja 0014).
+ * Cache jak filtry - zmienia się tylko przy synchronizacji. Zbiór to ~1,3 tys. firm,
+ * więc mieści się w jednej odpowiedzi PostgREST (limit 1000... - stąd jawny range do 5000
+ * na wypadek wzrostu; gdyby kiedyś przekroczył, trzeba dobierać porcjami jak w iterateReport).
+ */
+export const getContractorOptions = unstable_cache(fetchContractorOptions, ["contractor-options"], {
+  revalidate: 300,
+});
+
+async function fetchContractorOptions(): Promise<ContractorOption[]> {
+  const { data, error } = await supabaseAdmin()
+    .from("v_order_contractors")
+    .select("id,name")
+    .order("name", { ascending: true })
+    .range(0, 4999);
+  if (error) throw new Error(`select v_order_contractors: ${error.message}`);
+  return (data ?? []) as ContractorOption[];
 }
 
 export type SyncHealthRow = {

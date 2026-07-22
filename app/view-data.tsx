@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getReport, getFilterOptions, type Filters } from "@/lib/queries";
+import { getReport, getFilterOptions, getContractorOptions, type Filters } from "@/lib/queries";
 import { getKpi, type Kpi } from "@/lib/analytics";
 import { COLUMNS, type ReportView } from "@/lib/report-columns";
 import TableClient, { type Row } from "./table-client";
@@ -82,9 +82,11 @@ export default async function ViewData({
   // Wszystkie trzy zapytania równolegle. Sumy szły wcześniej osobnym komponentem
   // renderowanym dopiero po tabeli, więc ich czas doklejał się do czasu tabeli zamiast
   // z nim nakładać.
-  const [{ data, total, lastPage }, options, kpi] = await Promise.all([
+  const [{ data, total, lastPage }, options, contractors, kpi] = await Promise.all([
     getReport<Row>(view, page, filters),
     getFilterOptions(),
+    // Wyszukiwarka kontrahenta tylko na zamówieniach - nie ma sensu ciągnąć listy dla innych widoków
+    view === "orders" ? getContractorOptions() : Promise.resolve([]),
     view === "orders" ? getKpi(filters) : Promise.resolve(null),
   ]);
 
@@ -101,7 +103,7 @@ export default async function ViewData({
         <span className="text-sm text-plum/60">{LABELS[view]}</span>
       </div>
       <div className="overflow-hidden border border-gold bg-white">
-        <FiltersBar view={view} active={params} options={options} total={total} />
+        <FiltersBar view={view} active={params} options={options} contractors={contractors} total={total} />
         <TableClient view={view} columns={COLUMNS[view]} rows={data} params={params} note={note} />
         <Pager view={view} current={page} last={lastPage} params={params} />
       </div>

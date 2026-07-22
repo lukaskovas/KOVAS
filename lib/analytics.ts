@@ -22,6 +22,8 @@ export type AnalyticsFilters = {
   /** Handlowiec (opiekun kontrahenta) i typ kontrahenta - z kartoteki EASI, migracja 0011. */
   agent?: string;
   ctype?: string;
+  /** Konkretny kontrahent po company_id - tylko KPI zamówień (migracja 0014). */
+  company?: string;
   q?: string;
   sort?: string;
   dir?: "asc" | "desc";
@@ -51,9 +53,12 @@ function filterArgs(f: AnalyticsFilters) {
  * report_products_by) tego parametru nie przyjmują i dosłanie go kończy się błędem
  * "Could not find the function ... in the schema cache" - stąd osobny zestaw, a nie
  * dopisanie p_match do filterArgs.
+ *
+ * p_company dochodzi tu z tego samego powodu: filtr kontrahenta obsługuje wyłącznie
+ * report_kpi (migracja 0014), report_orders_by/report_products_by go nie przyjmują.
  */
 function kpiArgs(f: AnalyticsFilters) {
-  return { ...filterArgs(f), p_match: f.match ?? null };
+  return { ...filterArgs(f), p_match: f.match ?? null, p_company: f.company ? Number(f.company) : null };
 }
 
 /**

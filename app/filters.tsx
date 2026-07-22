@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { FilterOptions } from "@/lib/queries";
+import type { FilterOptions, ContractorOption } from "@/lib/queries";
 import type { ReportView } from "@/lib/report-columns";
 import Dropdown from "./dropdown";
 import { matchLabel, orderStatusLabel } from "@/lib/labels";
@@ -22,6 +22,7 @@ export type ActiveFilters = {
   country?: string;
   agent?: string;
   ctype?: string;
+  company?: string;
   sort?: string;
   dir?: string;
 };
@@ -60,16 +61,18 @@ export default function Filters({
   view,
   active,
   options,
+  contractors,
   total,
 }: {
   view: ReportView;
   active: ActiveFilters;
   options: FilterOptions;
+  contractors: ContractorOption[];
   total: number;
 }) {
   const hasFilters = Boolean(
     active.q || active.from || active.to || active.status || active.currency || active.match ||
-    active.country || active.agent || active.ctype,
+    active.country || active.agent || active.ctype || active.company,
   );
   const [open, setOpen] = useState(hasFilters);
 
@@ -113,6 +116,14 @@ export default function Filters({
               <>
                 <Select name="status" value={active.status} label="Status" options={options.statuses} translate={orderStatusLabel} />
                 <Select name="match" value={active.match} label="Dopasowanie" options={options.matches} translate={matchLabel} />
+                {/* Kontrahent po stabilnym company_id - wyszukiwarka, bo firm jest ~1,3 tys. */}
+                <Dropdown
+                  name="company"
+                  value={active.company}
+                  placeholder="Kontrahent: wszyscy"
+                  searchable
+                  options={contractors.map((c) => ({ value: String(c.id), label: c.name }))}
+                />
               </>
             )}
             {view === "companies" && <Select name="country" value={active.country} label="Kraj" options={options.countries} />}
