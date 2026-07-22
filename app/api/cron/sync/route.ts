@@ -10,7 +10,8 @@ import { refreshReports } from "@/lib/sync/refresh-reports";
  * firmy i produkty PRZED zamówieniami (FK orders.company_id, order_items.product_id),
  * zamówienia PRZED dopasowaniem faktur, wszystko PRZED odświeżeniem migawki raportowej.
  *
- * Zamówienia idą trybem przyrostowym (syncOrdersDelta - tylko zmiany od ostatniego przebiegu),
+ * Zamówienia idą trybem przyrostowym (syncOrdersDelta - tylko NOWE zamówienia od ostatniego
+ * przebiegu; zmiany statusu istniejących pokryją webhooki - patrz docstring syncOrdersDelta),
  * nie pełnym backfillem, bo ~700 stron nie zmieściłoby się w limicie czasu funkcji.
  * Pełny backfill historii uruchamia się raz, lokalnie (npm run backfill).
  */

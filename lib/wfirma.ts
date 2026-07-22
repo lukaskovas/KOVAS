@@ -149,11 +149,16 @@ export async function findGoodsPage(page: number, limit = 100): Promise<Record<s
  * warehouse_document_contents w tej samej odpowiedzi, więc nie potrzeba `get` per dokument.
  *
  * Filtr po typie jest istotny wydajnościowo, nie kosmetycznie: przyjęć (PW+PZ) jest ~46,
- * a wszystkich dokumentów ~2658 (reszta to rezerwacje R i wydania WZ, bez wartości kosztowej).
+ * wydań (WZ) ~882, a wszystkich dokumentów ~2658 (reszta to rezerwacje R, RW, MM).
  * Pełny sweep realnie rozbija się o współdzielony limit API wFirma.
+ *
+ * PW/PZ (przyjęcia) niosą cenę ZAKUPU (pole `price`) - do zgadywania kosztu metodą EASI.
+ * WZ (wydania) niosą FAKTYCZNY koszt własny wydanego towaru (pole `purchase_expense`) oraz
+ * dowiązanie do faktury (`invoice.id`) - to jest realny CoGS zaksięgowany przez wFirma przy
+ * sprzedaży i to jego używamy, patrz migracja 0020 i lib/sync/wfirma-costs.ts (syncIssueLines).
  */
 export async function findWarehouseDocsPage(
-  type: "PW" | "PZ",
+  type: "PW" | "PZ" | "WZ",
   page: number,
   limit = 100
 ): Promise<Record<string, unknown>[]> {

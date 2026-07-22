@@ -296,10 +296,16 @@ export async function syncAllOrders(
 const DELTA_BUFFER_SEC = 60 * 60;
 
 /**
- * Sync PRZYROSTOWY zamówień - tylko zmienione od ostatniego udanego przebiegu.
- * Endpoint orders/updated/<from>/<to>; znaczniki to unix w sekundach (API waliduje: liczba 1-10 cyfr).
+ * Sync PRZYROSTOWY zamówień - tylko UTWORZONE od ostatniego udanego przebiegu.
+ * Endpoint orders/created/<from>/<to>; znaczniki to unix w sekundach (API waliduje: liczba 1-10 cyfr).
  * Do uruchamiania z crona (co 15 min) - w przeciwieństwie do syncAllOrders nie przechodzi ~700 stron,
  * więc mieści się w limicie funkcji serverless. Wołać po syncCompanies()/syncProducts().
+ *
+ * UWAGA - świadome ograniczenie: bliźniaczy endpoint orders/updated/<from>/<to> (który łapałby też
+ * ZMIANY istniejących zamówień - status, płatność, edycja pozycji) wisi po stronie Turis niezależnie
+ * od szerokości okna (potwierdzone empirycznie), więc nie da się na nim polegać. Dlatego cron dociąga
+ * tylko NOWE zamówienia. Zmiany statusu/płatności istniejących zamówień pokryje dopiero warstwa
+ * webhooków (event order.updated) - następny krok. Pełny backfill (npm run backfill) łata rozjazdy.
  */
 export async function syncOrdersDelta(
   productIndex: ProductIndex,
@@ -342,7 +348,7 @@ export async function syncOrdersDelta(
     let page = 1;
     let lastPage = 1;
     do {
-      const { data, meta } = await turisGet<RawOrder>(`orders/updated/${fromSec}/${nowSec}`, { page });
+      const { data, meta } = await turisGet<RawOrder>(`orders/created/${fromSec}/${nowSec}`, { page });
       lastPage = meta?.last_page ?? page;
       seen += data.length;
 
