@@ -289,3 +289,94 @@ export async function syncAllOrders(
     return { seen, upserted, failed: 0 };
   });
 }
+
+// 1h nakładki na okno delty - upsert po id jest idempotentny, więc powtórne pobranie tych samych
+// rekordów nie szkodzi, a bufor chroni przed zgubieniem zmiany na granicy poprzedniego okna
+// (różnice zegarów, opóźnienia po stronie Turis).
+const DELTA_BUFFER_SEC = 60 * 60;
+
+/**
+ * Sync PRZYROSTOWY zamówień - tylko zmienione od ostatniego udanego przebiegu.
+ * Endpoint orders/updated/<from>/<to>; znaczniki to unix w sekundach (API waliduje: liczba 1-10 cyfr).
+ * Do uruchamiania z crona (co 15 min) - w przeciwieństwie do syncAllOrders nie przechodzi ~700 stron,
+ * więc mieści się w limicie funkcji serverless. Wołać po syncCompanies()/syncProducts().
+ */
+export async function syncOrdersDelta(
+  productIndex: ProductIndex,
+  validCompanyIds: Set<number>,
+  runType: "cron" | "manual" = "cron"
+) {
+  const db = supabaseAdmin();
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  // Watermark = początek ostatniego udanego synca zamówień (backfill lub delta) minus bufor.
+  // Bezpieczne czasowo: oba znaczniki (from i to) biorę z naszego zegara, nie z pól Turis,
+  // więc strefa czasowa API nie ma znaczenia. Bez historii - ostatnia doba.
+  const { data: last } = await db
+    .from("sync_log")
+    .select("started_at")
+    .in("source", ["turis_orders_backfill", "turis_orders_delta"])
+    .eq("status", "success")
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const fromSec = last?.started_at
+    ? Math.floor(new Date(last.started_at).getTime() / 1000) - DELTA_BUFFER_SEC
+    : nowSec - 24 * 3600;
+
+  const { data: logRow } = await db
+    .from("sync_log")
+    .insert({
+      source: "turis_orders_delta",
+      run_type: runType,
+      status: "running",
+      cursor_from: String(fromSec),
+      cursor_to: String(nowSec),
+    })
+    .select("id")
+    .single();
+
+  try {
+    let seen = 0;
+    let upserted = 0;
+    let page = 1;
+    let lastPage = 1;
+    do {
+      const { data, meta } = await turisGet<RawOrder>(`orders/updated/${fromSec}/${nowSec}`, { page });
+      lastPage = meta?.last_page ?? page;
+      seen += data.length;
+
+      const orderRows = data.map((o) => mapOrder(o, validCompanyIds));
+      const itemRows = data.flatMap((o) => mapOrderItems(o, productIndex.validIds, productIndex.unitCost));
+
+      if (orderRows.length) {
+        const { error: orderErr } = await db.from("orders").upsert(orderRows);
+        if (orderErr) throw new Error(`upsert orders delta (strona ${page}): ${orderErr.message}`);
+      }
+      if (itemRows.length) {
+        const { error: itemErr } = await db.from("order_items").upsert(itemRows, { onConflict: "id" });
+        if (itemErr) throw new Error(`upsert order_items delta (strona ${page}): ${itemErr.message}`);
+      }
+      upserted += orderRows.length;
+      page++;
+    } while (page <= lastPage);
+
+    await db
+      .from("sync_log")
+      .update({
+        finished_at: new Date().toISOString(),
+        status: "success",
+        records_seen: seen,
+        records_upserted: upserted,
+        records_failed: 0,
+      })
+      .eq("id", logRow?.id);
+    return { seen, upserted, fromSec, toSec: nowSec };
+  } catch (err) {
+    await db
+      .from("sync_log")
+      .update({ finished_at: new Date().toISOString(), status: "failed", error_message: String(err) })
+      .eq("id", logRow?.id);
+    throw err;
+  }
+}

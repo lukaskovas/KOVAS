@@ -8,6 +8,12 @@ import { createServerClient } from "@supabase/ssr";
  */
 
 export async function proxy(request: NextRequest) {
+  // Endpoint crona ma własną autoryzację (CRON_SECRET) i wołany jest bez sesji przez Vercel Cron -
+  // gdyby przechodził przez bramkę sesyjną, zostałby odbity na /login i sync nigdy by się nie wykonał.
+  if (request.nextUrl.pathname.startsWith("/api/cron")) {
+    return NextResponse.next({ request });
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
