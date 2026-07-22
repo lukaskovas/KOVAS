@@ -46,8 +46,10 @@ export const ORDER_COLUMNS: Column[] = [
   { key: "grand_total_price", header: "Wartość brutto", type: "money", currencyKey: "currency_code", align: "right", sortKey: "grand_total_price" },
   { key: "discount_price", header: "Rabat", type: "money", currencyKey: "currency_code", align: "right", sortKey: "discount_price" },
   { key: "vat_price", header: "Kwota VAT", type: "money", currencyKey: "currency_code", align: "right", optional: true },
-  { key: "shipping_price", header: "Transport netto", type: "money", currencyKey: "currency_code", align: "right", optional: true },
-  { key: "shipping_price_gross", header: "Transport brutto", type: "money", currencyKey: "currency_code", align: "right", optional: true },
+  { key: "shipping_price", header: "Transport netto", type: "money", currencyKey: "currency_code", align: "right" },
+  { key: "shipping_price_gross", header: "Transport brutto", type: "money", currencyKey: "currency_code", align: "right" },
+  { key: "products_net", header: "Suma produktów netto", type: "money", currencyKey: "currency_code", align: "right", sortKey: "products_net" },
+  { key: "products_gross", header: "Suma produktów brutto", type: "money", currencyKey: "currency_code", align: "right", sortKey: "products_gross" },
   { key: "cogs_total", header: "CoGS", type: "money", currencyKey: "currency_code", align: "right", sortKey: "cogs_total" },
   { key: "margin", header: "Marża", type: "money", currencyKey: "currency_code", align: "right", sortKey: "margin" },
   // Przeliczenia NBP wg kursu z dnia poprzedzającego zamówienie (migracja 0005)
