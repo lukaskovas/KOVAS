@@ -3,6 +3,12 @@
 import { useActionState, useEffect, useRef } from "react";
 import { useFormStatus } from "react-dom";
 import { createUser } from "./actions";
+import Dropdown from "../../dropdown";
+
+const ROLE_OPTIONS = [
+  { value: "user", label: "użytkownik" },
+  { value: "admin", label: "administrator" },
+];
 
 const inputClass = "mt-1 w-full border-2 border-gold bg-cream px-3 py-2 text-sm outline-none focus:border-plum";
 const labelClass = "font-display text-xs font-semibold uppercase tracking-wider text-plum";
@@ -44,10 +50,15 @@ export default function NewUserForm() {
 
         <label className="block">
           <span className={labelClass}>Rola</span>
-          <select name="role" defaultValue="user" className={inputClass}>
-            <option value="user">użytkownik</option>
-            <option value="admin">administrator</option>
-          </select>
+          <div className="mt-1">
+            <Dropdown
+              name="role"
+              value="user"
+              placeholder="Rola"
+              options={ROLE_OPTIONS}
+              includeEmpty={false}
+            />
+          </div>
         </label>
       </div>
 

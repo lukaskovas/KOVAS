@@ -21,6 +21,7 @@ export default function Dropdown({
   placeholder,
   options,
   searchable = false,
+  includeEmpty = true,
 }: {
   name: string;
   value?: string;
@@ -28,6 +29,9 @@ export default function Dropdown({
   options: Option[];
   /** Dokłada pole wyszukiwania i filtruje listę - dla długich list (kontrahenci). */
   searchable?: boolean;
+  /** Dokłada pustą opcję "placeholder" na górze listy (dla filtrów typu "wszyscy").
+   *  Wyłącz dla pól, które zawsze mają wartość - np. wybór roli. */
+  includeEmpty?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(value ?? "");
@@ -85,7 +89,7 @@ export default function Dropdown({
             />
           )}
           <ul role="listbox" className="max-h-72 overflow-y-auto py-1">
-            {[{ value: "", label: placeholder }, ...shown].map((o) => {
+            {(includeEmpty ? [{ value: "", label: placeholder }, ...shown] : shown).map((o) => {
               const active = o.value === selected;
               return (
                 <li key={o.value || "__all"} role="option" aria-selected={active}>

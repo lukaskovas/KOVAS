@@ -1,4 +1,5 @@
 import Shell from "../../shell";
+import Dropdown from "../../dropdown";
 import { requireAdmin } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabase";
 import { setRole } from "./actions";
@@ -56,14 +57,16 @@ export default async function UsersPage() {
                     ) : (
                       <form action={setRole} className="flex items-center gap-2">
                         <input type="hidden" name="id" value={u.id} />
-                        <select
+                        <Dropdown
                           name="role"
-                          defaultValue={u.role}
-                          className="border-2 border-gold bg-cream px-2 py-1 text-sm outline-none focus:border-plum"
-                        >
-                          <option value="user">użytkownik</option>
-                          <option value="admin">administrator</option>
-                        </select>
+                          value={u.role}
+                          placeholder="Rola"
+                          options={[
+                            { value: "user", label: "użytkownik" },
+                            { value: "admin", label: "administrator" },
+                          ]}
+                          includeEmpty={false}
+                        />
                         <button type="submit" className="text-xs uppercase tracking-wider text-plum underline">
                           Zapisz
                         </button>
