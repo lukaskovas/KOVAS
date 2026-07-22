@@ -4,9 +4,11 @@ Własny odpowiednik systemu EASI - w pełni u siebie, bez n8n.
 Stack: **Next.js (Vercel)** + **Supabase** (Postgres) + własne konektory.
 
 Status: **etap 1 gotowy (odczyt)** - Turis i wFirma zsynchronizowane do Supabase, raporty
-czytają z bazy (nie live z Turis). Wszystkie trzy blokery danych z analizy EASI są zamknięte:
-CoGS (z dokumentów magazynowych wFirma), kursy walut (NBP), handlowiec i typ kontrahenta
-(import z kartoteki EASI). Wystawianie faktur to etap 2, jeszcze nie zaczęte.
+czytają z bazy (nie live z Turis). Synchronizacja chodzi automatycznie przez Vercel Cron
+(Turis co 15 min, faktury wFirma co godzinę). Apka jest za logowaniem (role user/admin).
+Wszystkie trzy blokery danych z analizy EASI są zamknięte: CoGS (realny koszt z dokumentów
+wydania WZ wFirma), kursy walut (NBP), handlowiec i typ kontrahenta (import z kartoteki EASI).
+Wystawianie faktur to etap 2, jeszcze nie zaczęte.
 Otwarte pytania i to, co czeka na potwierdzenie: [docs/OTWARTE-PYTANIA.md](docs/OTWARTE-PYTANIA.md).
 
 ## Uruchomienie lokalne
@@ -16,6 +18,12 @@ npm install
 npm run migrate              # schemat bazy
 npm run preview              # serwer produkcyjny z watchdogiem (preview:stop / preview:status)
 ```
+> **Migracje stosuj TYLKO przez `npm run migrate`.** Jeśli wgrasz coś do bazy poza runnerem
+> (SQL editor, ręczne `pg`), dopisz plik do tabeli `_migrations`, inaczej runner spróbuje uruchomić
+> go ponownie i padnie (tak było z `0024`, gdy tabele istniały, ale wpis w `_migrations` brakował -
+> już pogodzone). Migracje są pisane idempotentnie (`create table if not exists` / `drop`-`create` /
+> `create or replace`), więc ponowne uruchomienie na istniejącej bazie jest bezpieczne.
+
 NIE używać `npm run dev` - Turbopack na tym Macu rozbiega się do 800%+ CPU.
 `npm run preview` ubija serwer po 30 min życia i przy CPU >=400%, żeby nie zostawiać pętli w tle.
 Serwer zabijać po porcie (`lsof -ti:3000 -sTCP:LISTEN | xargs kill`), **nigdy** `pkill -f next-server`
@@ -34,7 +42,7 @@ Sekrety trzymamy tylko w `.env.local` (poza repo) / env Vercela. Nigdy we fronte
 ```bash
 npm run backfill         # Turis (kontrahenci, produkty, zamówienia, pozycje) + faktury wFirma + matcher
 npm run sync-fx          # kursy NBP (tabela A, EUR i USD) do fx_rates
-npm run sync-costs       # towary i dokumenty przyjęć wFirma -> warstwy kosztowe (CoGS)
+npm run sync-costs       # dokumenty wydania WZ wFirma -> realny koszt własny pozycji (CoGS) + przyjęcia
 npm run import-agents    # handlowiec + typ kontrahenta z kartoteki EASI (zrzut CSV w docs/)
 npm run refresh-reports  # przelicza migawkę mv_report_orders - BEZ TEGO RAPORTY POKAZUJĄ STARY STAN
 ```
@@ -57,18 +65,34 @@ npm run refresh-reports  # przelicza migawkę mv_report_orders - BEZ TEGO RAPORT
 - `scripts/compare-totals.ts` (`npm run compare-totals`) - porównuje starą ścieżkę sum (JS)
   z agregatem SQL; użyty przy migracjach 0008/0009, zostaje jako test regresji
 - `app/page.tsx` + `app/view-data.tsx` - panel: Raport zamówień / Sprzedaż produktów / Kontrahenci
+  (raport zamówień pokazuje też status realizacji i dane dostaw - migracje `0021/0023/0024/0025`)
 - `app/raporty/` + `app/analytics-view.tsx` - zakładka Raporty: podsumowanie, kontrahenci, produkty,
-  okresy, kraje, struktura, handlowcy, uśpieni klienci (każdy z filtrami i eksportem)
+  zakupy (per produkt z przyjęć wFirma), okresy, kraje, struktura, handlowcy, uśpieni klienci
+  (każdy z filtrami i eksportem)
 - `app/api/export`, `app/api/export-report` - eksport CAŁEGO wyniku po filtrach (CSV lub `?format=xlsx`)
+- **Logowanie i role** - `app/login/`, `app/konto/` (zmiana hasła), `lib/auth.ts`
+  (`requireUser()`/`requireAdmin()`), `proxy.ts` (bramka sesji Supabase, przekierowanie na `/login`),
+  migracja `0013_auth_profiles`. Apka jest zamknięta - wymaga zalogowania.
+- **Panel admina** - `app/admin/uzytkownicy/` (zakładanie/reset/usuwanie użytkowników),
+  `app/admin/kontrahenci/` (dodawanie i edycja kontrahentów, migracja `0019`)
+- **Vercel Cron** (`vercel.json`, `app/api/cron/`) - automatyczna synchronizacja bez webhooków:
+  `cron/sync` co 15 min (Turis: firmy, produkty, nowe/otwarte zamówienia, dopasowanie faktur),
+  `cron/invoices` co godzinę (nowe faktury wFirma). Autoryzacja przez `CRON_SECRET`. Migawkę
+  raportową odświeżają same, tylko gdy coś wpadło. Pełny backfill dalej lokalnie (za długo dla crona).
 - `docs/analiza-easi/` - analiza EASI, mapowanie kolumn i luk, decyzje architektoniczne, mapa API Turis
 - `docs/research/` - standard raportowy branży (NotebookLM) i kandydaci na kolejne raporty
 - `docs/spotkania/` - notatki ze spotkań i research (Sellasist, wFirma, WMS)
 
 ## Jak liczymy - reguły przyjęte i udokumentowane
-- **CoGS**: cena jednostkowa z **pierwszego przyjęcia** towaru w wFirma (`v_good_unit_cost`) - tak
-  liczy dziś EASI, dlatego liczby zgadzają się co do grosza (zam. 11098: 533,30 zł). Baza trzyma
-  WARSTWY przyjęć, więc zmiana metody na średnią ważoną kroczącą = podmiana jednego widoku,
-  bez ponownego syncu. **Metoda docelowa czeka na decyzję Łukasza** - patrz OTWARTE-PYTANIA.
+- **CoGS**: **realny koszt własny z dokumentów wydania WZ** w wFirma (`purchase_expense` na pozycji WZ,
+  migracja `0020`) - to faktyczna wycena wFirmy przy wydaniu towaru, nie koszt modelowany. Łańcuch:
+  `order_items` → `orders` → `order_invoice_links` → faktura = WZ → pozycja WZ. Dotyczy ery wFirmy
+  (od kwietnia 2026, ~13% zamówień). Dla **historii sprzed wFirmy** (brak WZ) koszt jest **szacowany**
+  metodą migracyjną - cena z pierwszego przyjęcia (`v_good_unit_cost`, migracja `0026`), o ile każda
+  pozycja mapuje się na towar wFirma z kosztem; inaczej CoGS/marża = NULL („-" w UI, licznik
+  `missing_cost_count`). Razem pokrycie ~52% zamówień. **KPI Marża liczy tylko zamówienia z policzonym
+  kosztem** - świadomy, uczciwy wybór, komunikowany w UI. Dawna metoda „pierwsze przyjęcie dla
+  wszystkiego" (`v_good_unit_cost` jako jedyne źródło) została porzucona - zawyżała marżę.
 - **Kursy**: NBP tabela A z dnia poprzedzającego zamówienie (weekend -> ostatnie notowanie przed datą).
   Kwoty w PLN zgadzają się z EASI, EUR się różni - EASI stosuje jeden bieżący kurs do całego raportu.
 - **Handlowiec i typ kontrahenta**: atrybut KONTRAHENTA (tak samo jak w EASI), zaimportowany
@@ -93,9 +117,9 @@ Wszystkie kwoty w raportach zbiorczych są w PLN (kurs NBP z dnia poprzedzające
 sumowanie kolumn w walucie zamówienia mieszałoby złotówki z euro.
 
 ## Dalej
-- Krok 6: webhooki Turis + Vercel Cron (nocna synchronizacja) - wymaga wdrożenia na Vercel
 - Backupy (warunek Łukasza): backup Supabase + cykliczny eksport na Google Drive
-- Etap 2: wystawianie faktur do wFirma (dopiero po weryfikacji zgodności danych z EASI)
+- Etap 2: wystawianie faktur do wFirma (dopiero po weryfikacji zgodności danych z EASI) -
+  wstępny plan w [docs/PLAN-AUTOFAKTUROWANIE.md](docs/PLAN-AUTOFAKTUROWANIE.md)
 - Weryfikacja kontrahentów po NIP (CEIDG/KRS/GUS)
 - Pełna lista otwartych tematów: [docs/OTWARTE-PYTANIA.md](docs/OTWARTE-PYTANIA.md)
 - Do sprzątnięcia ręcznie (nie kasuję plików bez zgody): `app/api/_wfirma_test/`,
