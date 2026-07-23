@@ -1,23 +1,23 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { syncCompanies, syncProducts, syncOrdersDelta, syncOpenOrders } from "@/lib/sync/turis";
-import { syncInvoices, refreshRecentInvoices } from "@/lib/sync/wfirma";
 import { matchInvoicesToOrders } from "@/lib/sync/match-invoices";
-import { refreshReports } from "@/lib/sync/refresh-reports";
+import { refreshReports, warmReports } from "@/lib/sync/refresh-reports";
 
 /**
- * Cykliczna synchronizacja danych (Turis + wFirma) -> Supabase, uruchamiana przez Vercel Cron
- * co 15 minut (harmonogram w vercel.json). Kolejność ma znaczenie:
- * firmy i produkty PRZED zamówieniami (FK orders.company_id, order_items.product_id),
- * zamówienia PRZED dopasowaniem faktur, wszystko PRZED odświeżeniem migawki raportowej.
+ * Cron TURIS - co 15 minut (harmonogram w vercel.json). Szybka pętla: firmy, produkty,
+ * nowe zamówienia (delta) i statusy otwartych zamówień. Faktury wFirmy są w OSOBNYM cronie
+ * (/api/cron/invoices, co godzinę) - są wolne przez limit API wFirmy i zmieniają się rzadziej,
+ * więc trzymanie ich tutaj wywalało budżet czasu funkcji (całość > 300 s).
  *
- * Zamówienia idą trybem przyrostowym (syncOrdersDelta - tylko NOWE zamówienia od ostatniego
- * przebiegu; zmiany statusu istniejących pokryją webhooki - patrz docstring syncOrdersDelta),
- * nie pełnym backfillem, bo ~700 stron nie zmieściłoby się w limicie czasu funkcji.
+ * Kolejność: firmy i produkty PRZED zamówieniami (FK), potem dopasowanie faktur do (być może
+ * nowych) zamówień i odświeżenie migawki raportowej na końcu.
+ *
+ * Zamówienia: syncOrdersDelta dokłada NOWE (endpoint orders/created), syncOpenOrders odświeża
+ * statusy otwartych (nie Shipped/Completed) - razem pokrywają cykl życia zamówienia bez webhooków.
  * Pełny backfill historii uruchamia się raz, lokalnie (npm run backfill).
  */
 
-// Pro pozwala do 300 s - z zapasem, bo delta jest zwykle mała, ale wFirma bywa wolna przy limicie API
-export const maxDuration = 300;
+export const maxDuration = 120;
 export const dynamic = "force-dynamic";
 
 /**
@@ -44,13 +44,16 @@ export async function GET(req: NextRequest) {
     // Po dociągnięciu nowych zamówień odświeżamy statusy tych otwartych (nie Shipped/Completed) -
     // łapie przejście "otwarte -> wysłane" bez zepsutego orders/updated i bez webhooków.
     const openOrders = await syncOpenOrders(products, companies.validIds, "cron");
-    const invoices = await syncInvoices();
-    // Douczanie istniejących faktur (okno 45 dni + stare nieopłacone) - bramkowane do ~raz/dobę
-    // wewnątrz funkcji, więc tu wołamy co cykl bez obawy o limit API. Przed matcherem, żeby
-    // dopasowanie kwot widziało odświeżone totale.
-    const invoicesRefresh = await refreshRecentInvoices();
+    // Nowe zamówienia mogą pasować do faktur, które przyszły wcześniej - dopasowujemy, potem raporty.
     const matched = await matchInvoicesToOrders();
-    const refreshMs = await refreshReports();
+    // Migawkę raportową (mv_report_orders) przeliczamy TYLKO, gdy w tym przebiegu faktycznie coś
+    // wpadło: nowe zamówienia, odświeżone otwarte (mógł się zmienić status) lub nowe dopasowania
+    // faktur. Pusty kwadrans (noc/weekend, zero ruchu) nie marnuje pełnego refresh materialized view.
+    const reportsDirty = orders.upserted > 0 || openOrders.upserted > 0 || matched.linksCreated > 0;
+    const refreshMs = reportsDirty ? await refreshReports() : null;
+    // Rozgrzewamy cache ciężkich ścieżek panelu ZAWSZE (nawet w pusty kwadrans i po refreshu,
+    // który czyści cache migawki) - żeby pierwszy użytkownik nie trafił w zimny start ~12 s.
+    const warmMs = await warmReports();
 
     return NextResponse.json({
       ok: true,
@@ -58,10 +61,10 @@ export async function GET(req: NextRequest) {
       products: products.validIds.size,
       orders: { seen: orders.seen, upserted: orders.upserted, from: orders.fromSec, to: orders.toSec },
       openOrders,
-      invoices: { upserted: invoices.upserted, partial: invoices.partial },
-      invoicesRefresh,
       matched,
+      refreshed: reportsDirty,
       refreshMs,
+      warmMs,
       totalMs: Date.now() - startedAt,
     });
   } catch (err) {

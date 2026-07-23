@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { getReport, getFilterOptions, getContractorOptions, type Filters } from "@/lib/queries";
 import { getKpi, type Kpi } from "@/lib/analytics";
 import { COLUMNS, type ReportView } from "@/lib/report-columns";
@@ -62,9 +63,9 @@ function Totals({ kpi }: { kpi: Kpi | null }) {
       ))}
       {missingCost > 0 && (
         <div className="col-span-2 text-xs text-amber-700 sm:col-span-4">
-          Uwaga: CoGS i Marża obejmują tylko zamówienia z policzonym kosztem. {missingCost} zamówień
-          nie ma kosztu (brak wydania WZ z wFirmy - zwykle sprzedaż sprzed wdrożenia wFirmy) i nie
-          wchodzi do marży.
+          Uwaga: Marża dla starszych zamówień jest SZACOWANA kosztem migracyjnym (jak EASI), dla
+          nowszych - dokładna z wydań WZ. {missingCost} zamówień nadal nie ma kosztu (produkt spoza
+          katalogu wFirmy) i nie wchodzi do marży.
         </div>
       )}
       {missingRate > 0 && (
@@ -73,6 +74,42 @@ function Totals({ kpi }: { kpi: Kpi | null }) {
           Uruchom <code>npm run sync-fx</code>, żeby uzupełnić notowania.
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Podsumowanie (KPI) jako OSOBNY strumień - najcięższe i jedyne niecacheowane zapytanie
+ * (report_kpi liczy m.in. distinct SKU po ~89 tys. pozycji). Trzymane poza głównym
+ * Promise.all tabeli, żeby:
+ *  - tabela ładowała się od razu, a kafelki dostreamowały się chwilę później,
+ *  - timeout bazy na KPI NIE wywalał całej strony (błąd łapiemy tu, nie leci do error boundary).
+ */
+async function OrdersTotals({ filters }: { filters: Filters }) {
+  let kpi: Kpi | null = null;
+  try {
+    kpi = await getKpi(filters);
+  } catch {
+    return (
+      <div className="mb-4 border-t-2 border-amber-400 bg-white px-4 py-3 text-xs text-amber-700">
+        Nie udało się teraz policzyć podsumowania (przekroczony czas bazy przy tak szerokim zakresie).
+        Tabela poniżej działa niezależnie - zawęź zakres dat albo odśwież stronę, żeby spróbować ponownie.
+      </div>
+    );
+  }
+  return <Totals kpi={kpi} />;
+}
+
+/** Placeholder kafelków podsumowania na czas doliczania KPI. */
+function TotalsSkeleton() {
+  return (
+    <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="border-t-2 border-gold bg-white px-4 py-3">
+          <div className="h-3 w-24 animate-pulse bg-sand" />
+          <div className="mt-2 h-5 w-28 animate-pulse bg-cream" />
+        </div>
+      ))}
     </div>
   );
 }
@@ -90,25 +127,28 @@ export default async function ViewData({
   params: Record<string, string | undefined>;
   isAdmin: boolean;
 }) {
-  // Wszystkie trzy zapytania równolegle. Sumy szły wcześniej osobnym komponentem
-  // renderowanym dopiero po tabeli, więc ich czas doklejał się do czasu tabeli zamiast
-  // z nim nakładać.
-  const [{ data, total, lastPage }, options, contractors, kpi] = await Promise.all([
+  // Tabela + opcje filtrów + kontrahenci równolegle. KPI (sumy) świadomie NIE ma tu -
+  // to najcięższe, niecacheowane zapytanie, więc streamuje się osobno (OrdersTotals niżej),
+  // żeby tabela pojawiała się od razu, a jej ewentualny timeout nie blokował ani nie wywalał strony.
+  const [{ data, total, lastPage }, options, contractors] = await Promise.all([
     getReport<Row>(view, page, filters),
     getFilterOptions(),
     // Wyszukiwarka kontrahenta tylko na zamówieniach - nie ma sensu ciągnąć listy dla innych widoków
     view === "orders" ? getContractorOptions() : Promise.resolve([]),
-    view === "orders" ? getKpi(filters) : Promise.resolve(null),
   ]);
 
   const note =
     view === "orders" || view === "products"
-      ? "CoGS to realny koszt własny z dokumentów wydania wFirma (WZ) - koszt faktycznie zdjęty z magazynu przy danej sprzedaży, dowiązany przez fakturę. Znamy go dla ery wFirmy (od 04.2026); zamówienia sprzed wdrożenia wFirmy nie mają wydania WZ, więc CoGS i marża są dla nich puste (\"-\") zamiast mylącego 100%. Marża liczona bez transportu (patrz docs/analiza-easi/LUKI-DANYCH.md)."
+      ? "CoGS liczony dwustopniowo: dla ery wFirmy (od 04.2026) to realny koszt z dokumentów wydania WZ (faktycznie zdjęty z magazynu, dowiązany przez fakturę); dla starszych zamówień - koszt SZACOWANY metodą migracyjną (cena z pierwszego przyjęcia towaru, tak samo jak EASI). Zamówienia z produktem spoza katalogu wFirmy (wycofanym przed migracją) nie mają kosztu, więc CoGS i marża są dla nich puste (\"-\") zamiast mylącego 100%. Marża liczona bez transportu (patrz docs/analiza-easi/LUKI-DANYCH.md)."
       : undefined;
 
   return (
     <>
-      {view === "orders" && <Totals kpi={kpi} />}
+      {view === "orders" && (
+        <Suspense fallback={<TotalsSkeleton />}>
+          <OrdersTotals filters={filters} />
+        </Suspense>
+      )}
       {view === "companies" && isAdmin && (
         <AddContractorPanel agents={options.agents} ctypes={options.ctypes} />
       )}

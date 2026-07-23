@@ -20,10 +20,11 @@ function isTransient(err: unknown): boolean {
   return /fetch failed|network|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket|EAI_AGAIN|HTTP 50[234]|HTTP 429/i.test(String(err));
 }
 
-// Ponawia operację sieciową przy błędzie przejściowym (backoff 0.5s/1s/2s). Backfill przechodzi
-// ~700 stron przez ~30 min - pojedynczy "fetch failed" do Supabase/Turis nie może wywrócić całego
-// przebiegu. Zachowuje etykietę w komunikacie, żeby sync_log dalej pokazywał, na czym poległo.
-async function withRetry<T>(label: string, fn: () => Promise<T>, tries = 4): Promise<T> {
+// Ponawia operację sieciową przy błędzie przejściowym (backoff 0.5/1/2/4/8s, do 6 prób = ~15s
+// cierpliwości). Backfill przechodzi ~700 stron - Turis potrafi zacząć zrzucać połączenia po serii
+// szybkich zapytań (throttling), a taka przerwa bywa dłuższa niż sekunda, stąd długi ogon prób.
+// Zachowuje etykietę w komunikacie, żeby sync_log dalej pokazywał, na czym poległo.
+async function withRetry<T>(label: string, fn: () => Promise<T>, tries = 6): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try {
       return await fn();
@@ -342,6 +343,9 @@ export async function syncAllOrders(
       upserted += orderRows.length;
       onProgress?.(page, lastPage);
       page++;
+      // delikatne tempo - ~380 zapytań pod rząd wywoływało u Turisa zrzucanie połączeń; 120 ms
+      // przerwy między stronami zbija tempo na tyle, by throttling nie odcinał backfillu
+      await new Promise((r) => setTimeout(r, 120));
     } while (page <= lastPage);
     return { seen, upserted, failed: 0 };
   });

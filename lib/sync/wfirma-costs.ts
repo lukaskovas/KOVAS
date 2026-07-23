@@ -16,6 +16,9 @@ import { supabaseAdmin, fetchAll } from "@/lib/supabase";
 const PAGE_SIZE = 100;
 const BACKOFF_MS = [30_000, 60_000, 120_000, 240_000];
 
+/** Źródło w sync_log dla przyjęć - na nim stoją zakładki ZAKUPY i DOSTAWY (świeżość widoczna w panelu). */
+const RECEIPTS_SOURCE = "wfirma_receipts";
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function emptyToNull(v: unknown): string | null {
@@ -166,32 +169,62 @@ export async function syncGoods(): Promise<{ upserted: number; partial: boolean 
  * Przyjęcia PW i PZ wraz z pozycjami. Pobieramy WYŁĄCZNIE te dwa typy - pozostałe dokumenty
  * magazynowe (rezerwacje R, wydania WZ, RW, MM) nie niosą ceny zakupu, a jest ich ~50x więcej.
  */
-export async function syncReceiptLayers(): Promise<{ docs: number; layers: number; partial: boolean }> {
+export async function syncReceiptLayers(runType = "cron"): Promise<{ docs: number; layers: number; partial: boolean }> {
   const db = supabaseAdmin();
+  const { data: logRow } = await db
+    .from("sync_log")
+    .insert({ source: RECEIPTS_SOURCE, run_type: runType, status: "running" })
+    .select("id")
+    .single();
+
   const headers: Record<string, unknown>[] = [];
   const layers: Record<string, unknown>[] = [];
+  let partial = false;
 
-  for (const type of ["PW", "PZ"] as const) {
-    for (let page = 1; ; page++) {
-      const rows = await withRetry(() => findWarehouseDocsPage(type, page, PAGE_SIZE));
-      if (rows === null) return { docs: headers.length, layers: layers.length, partial: true };
-      if (rows.length === 0) break;
+  try {
+    for (const type of ["PW", "PZ"] as const) {
+      for (let page = 1; ; page++) {
+        const rows = await withRetry(() => findWarehouseDocsPage(type, page, PAGE_SIZE));
+        // Limit API wyczerpał próby: przerywamy i ZAPISUJEMY, co zdążyliśmy (upsert niżej) -
+        // częściowy pobór jest lepszy niż utrata całej strony; następny przebieg dopełni.
+        if (rows === null) { partial = true; break; }
+        if (rows.length === 0) break;
 
-      for (const doc of rows) {
-        headers.push(toReceiptDocRow(doc));
-        layers.push(...toLayerRows(doc));
+        for (const doc of rows) {
+          headers.push(toReceiptDocRow(doc));
+          layers.push(...toLayerRows(doc));
+        }
+        if (rows.length < PAGE_SIZE) break;
       }
-      if (rows.length < PAGE_SIZE) break;
+      if (partial) break;
     }
+
+    // Nagłówki (dostawca, wartość dostawy) do raportu dostaw - obok warstw kosztowych.
+    const { error: hErr } = await db.from("wfirma_receipt_docs").upsert(headers);
+    if (hErr) throw new Error(`upsert wfirma_receipt_docs: ${hErr.message}`);
+
+    const { error } = await db.from("wfirma_receipt_layers").upsert(layers);
+    if (error) throw new Error(`upsert wfirma_receipt_layers: ${error.message}`);
+
+    await db
+      .from("sync_log")
+      .update({
+        finished_at: new Date().toISOString(),
+        status: partial ? "partial" : "success",
+        records_seen: headers.length,
+        records_upserted: layers.length,
+        error_message: partial ? "Przerwano: limit API wFirma wyczerpał próby na stronie przyjęć" : null,
+      })
+      .eq("id", logRow?.id);
+
+    return { docs: headers.length, layers: layers.length, partial };
+  } catch (err) {
+    await db
+      .from("sync_log")
+      .update({ finished_at: new Date().toISOString(), status: "failed", error_message: String(err) })
+      .eq("id", logRow?.id);
+    throw err;
   }
-
-  // Nagłówki (dostawca, wartość dostawy) do raportu dostaw - obok warstw kosztowych.
-  const { error: hErr } = await db.from("wfirma_receipt_docs").upsert(headers);
-  if (hErr) throw new Error(`upsert wfirma_receipt_docs: ${hErr.message}`);
-
-  const { error } = await db.from("wfirma_receipt_layers").upsert(layers);
-  if (error) throw new Error(`upsert wfirma_receipt_layers: ${error.message}`);
-  return { docs: headers.length, layers: layers.length, partial: false };
 }
 
 /**

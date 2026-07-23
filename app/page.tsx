@@ -4,6 +4,11 @@ import Shell from "./shell";
 import { type Filters } from "@/lib/queries";
 import { requireUser } from "@/lib/auth";
 
+// Zimne zapytania raportowe (report_kpi po ~89 tys. pozycji) potrafią zająć ~12 s po chwili
+// bezczynności bazy. Bez tego strona łapie domyślny limit funkcji Vercela (10 s) i jest ubijana
+// w trakcie streamowania KPI - stąd czarny ekran "server error" przy przełączaniu zakładek.
+export const maxDuration = 60;
+
 type SearchParams = {
   view?: string; page?: string; q?: string; from?: string; to?: string;
   status?: string; currency?: string; match?: string; realization?: string; country?: string;

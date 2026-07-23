@@ -142,7 +142,11 @@ export async function syncInvoices() {
 }
 
 const REFRESH_SOURCE = "wfirma_invoices_refresh";
-const REFRESH_DAYS = 45;
+// 14 dni (nie 45): re-fetch całego okna z wFirmy musi zmieścić się w limicie czasu funkcji.
+// 45 dni to ~1200 faktur i przekraczało 300 s. Zmiany, które trzeba złapać w tym oknie, to
+// korekty kwot na już opłaconych fakturach (rzadkie, zwykle szybko po wystawieniu) - płatności
+// starych nieopłaconych łapie osobny, zawsze aktywny zestaw (findUnpaidInvoicesBefore).
+const REFRESH_DAYS = 14;
 // Bramka: re-fetch całego okna (+ starych nieopłaconych) raz na dobę, nie co cykl - żeby nie
 // dokładać presji na współdzielony limit API wFirma. 20h < 24h daje zapas, żeby przebieg nie
 // "przesuwał się" po dobie i nie wypadał czasem dwa razy dziennie, a czasem wcale.

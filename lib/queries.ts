@@ -52,6 +52,14 @@ type ViewConfig = {
   defaultDir: "asc" | "desc";
   /** Kolumny, na których wolno filtrować - klucz filtru -> kolumna w widoku. */
   filterColumns: Partial<Record<"status" | "currency" | "match" | "realization" | "country" | "agent" | "ctype" | "company", string>>;
+  /**
+   * Tryb liczenia total dla paginacji. Domyślnie "exact" (dokładny count). Dla widoku pozycji
+   * (v_order_items_report, 89 tys. wierszy z JOIN-ami) count exact to ~5 s na zimno przy KAŻDYM
+   * przełączeniu zakładki - dla nagłówka "X pozycji" i paginacji wystarczy szacunek z planera
+   * Postgresa ("estimated"), który jest natychmiastowy. PostgREST i tak zwraca dokładny count,
+   * gdy zbiór jest mały, a szacunek dopiero dla dużych.
+   */
+  countMode?: "exact" | "estimated";
 };
 
 const CONFIG: Record<ReportView, ViewConfig> = {
@@ -78,6 +86,8 @@ const CONFIG: Record<ReportView, ViewConfig> = {
     defaultSort: "turis_created_at",
     defaultDir: "desc",
     filterColumns: { currency: "currency_code" },
+    // 89 tys. wierszy z JOIN-ami: dokładny count kosztuje ~5 s na zimno, szacunek jest natychmiastowy.
+    countMode: "estimated",
   },
   companies: {
     view: "companies",
@@ -92,7 +102,7 @@ const CONFIG: Record<ReportView, ViewConfig> = {
 function buildQuery(v: ReportView, f: Filters, select: string, count: boolean) {
   const cfg = CONFIG[v];
   let query = count
-    ? supabaseAdmin().from(cfg.view).select(select, { count: "exact" })
+    ? supabaseAdmin().from(cfg.view).select(select, { count: cfg.countMode ?? "exact" })
     : supabaseAdmin().from(cfg.view).select(select);
 
   if (f.q?.trim()) {

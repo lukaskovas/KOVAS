@@ -1,4 +1,5 @@
 import "server-only";
+import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
@@ -103,12 +104,62 @@ export type Kpi = {
   missing_rate_count: number;
   /** Zamówienia bez policzonego kosztu (brak WZ z wFirmy) - nie obejmuje ich marża (migracja 0020). */
   missing_cost_count: number;
+  /** Wiszące zamówienia (era wFirMY, bez faktury) - wypadły z przychodu/kosztu, liczone osobno (migracja 0028). */
+  awaiting_orders_count: number;
+  /** Łączna wartość netto wiszących zamówień (bez faktury) w PLN (migracja 0028). */
+  awaiting_net_pln: number;
 };
 
-export async function getKpi(f: AnalyticsFilters): Promise<Kpi | null> {
+/** Czy filtr jest pusty - wtedy KPI == cała historia, którą mamy gotową w snapshocie. */
+function hasNoFilters(f: AnalyticsFilters): boolean {
+  return (
+    !f.from && !f.to && !f.currency && !f.status && !f.country &&
+    !f.match && !f.agent && !f.ctype && !f.company && !f.q?.trim()
+  );
+}
+
+/** Kolumny snapshotu 1:1 z typem Kpi (migracja 0027). */
+const KPI_SNAPSHOT_COLS =
+  "orders_count,companies_count,skus_count,items_qty,net_pln,gross_pln,vat_pln,discount_pln," +
+  "cogs_pln,margin_pln,avg_order_pln,avg_items_per_order,first_order,last_order," +
+  "missing_rate_count,missing_cost_count,awaiting_orders_count,awaiting_net_pln";
+
+/**
+ * Gotowe KPI całej historii z tabeli-snapshotu (liczonej podczas synchronizacji, migracja 0027).
+ * Odczyt jednego wiersza jest natychmiastowy nawet przy dławionym CPU bazy. Snapshot to
+ * optymalizacja, nie źródło prawdy - brak wiersza / błąd zwraca null, a wołający liczy KPI na żywo.
+ */
+async function readKpiSnapshot(): Promise<Kpi | null> {
+  const { data, error } = await supabaseAdmin()
+    .from("report_kpi_snapshot")
+    .select(KPI_SNAPSHOT_COLS)
+    .eq("id", 1)
+    .maybeSingle();
+  if (error) return null;
+  return (data as Kpi | null) ?? null;
+}
+
+async function fetchKpi(f: AnalyticsFilters): Promise<Kpi | null> {
+  // Domyślny widok (cała historia) - bierzemy gotowy snapshot zamiast liczyć najcięższe
+  // zapytanie na żywo. Gdy snapshotu jeszcze nie ma (pierwszy deploy przed pierwszym syncem),
+  // spadamy do liczenia na żywo.
+  if (hasNoFilters(f)) {
+    const snap = await readKpiSnapshot();
+    if (snap) return snap;
+  }
   const rows = await rpc<Kpi>("report_kpi", kpiArgs(f));
   return rows[0] ?? null;
 }
+
+/**
+ * Cache jak dla filtrów i kontrahentów (lib/queries.ts): report_kpi to najcięższe zapytanie,
+ * a jego wynik zmienia się tylko przy synchronizacji (co 15 min), nie w trakcie przeglądania.
+ * Instancja bazy jest burstowa (CPU bywa dławione: to samo zapytanie raz 0,5 s, raz 12 s+),
+ * więc cache 5 min zdejmuje z niej powtórne przeliczenia - po pierwszym udanym policzeniu
+ * kolejne wejścia (ten sam zestaw filtrów) idą z cache w milisekundach. Klucz cache to
+ * zserializowane argumenty, więc różne filtry mają osobne wpisy.
+ */
+export const getKpi = unstable_cache(fetchKpi, ["order-kpi"], { revalidate: 300 });
 
 /** Wiersz agregatu - wspólny kształt dla wszystkich wymiarów (część kolumn bywa pusta). */
 export type AggRow = {

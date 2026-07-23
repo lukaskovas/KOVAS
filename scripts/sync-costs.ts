@@ -16,7 +16,7 @@ async function main() {
   console.log(`   ${goods.upserted} towarów${goods.partial ? " - PRZERWANE limitem API" : ""}\n`);
 
   console.log("-> przyjęcia magazynowe (PW + PZ)...");
-  const receipts = await syncReceiptLayers();
+  const receipts = await syncReceiptLayers("backfill");
   console.log(`   ${receipts.docs} dokumentów, ${receipts.layers} warstw kosztowych${receipts.partial ? " - PRZERWANE limitem API" : ""}\n`);
 
   console.log("-> dostawcy przyjęć (wFirma) - do raportu dostaw...");

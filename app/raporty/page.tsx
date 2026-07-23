@@ -7,6 +7,10 @@ import { getFilterOptions } from "@/lib/queries";
 import { PERIODS, REPORTS, isPeriod, isReportKey, type AnalyticsFilters as AF } from "@/lib/analytics";
 import { requireUser } from "@/lib/auth";
 
+// Patrz app/page.tsx: zimne agregaty (report_kpi, sumy po pozycjach) przekraczają domyślny
+// limit funkcji Vercela i wywalają stronę. Podnosimy limit, żeby zimny start się dokończył.
+export const maxDuration = 60;
+
 /**
  * Zakładka "Raporty" - agregaty (kto kupuje najwięcej, co się sprzedaje, jak idzie w czasie).
  * Uzupełnienie raportów szczegółowych z "/", które pokazują pojedyncze zamówienia i pozycje.
