@@ -45,6 +45,14 @@ function KpiCards({ kpi }: { kpi: Kpi }) {
     ["Produktów (SKU)", num(kpi.skus_count)],
     ["Udzielone rabaty", fmtMoney(kpi.discount_pln)],
   ];
+  // Wiszące zamówienia (era wFirMY, bez faktury) nie wchodzą do przychodu ani kosztu - ich łączna
+  // wartość jako osobna pozycja. Pokazujemy tylko gdy takie zamówienia istnieją (migracja 0028).
+  if (Number(kpi.awaiting_orders_count) > 0) {
+    cards.push([
+      `Wartość zamówień bez faktury (${num(kpi.awaiting_orders_count)})`,
+      fmtMoney(kpi.awaiting_net_pln),
+    ]);
+  }
   return (
     <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
       {cards.map(([label, value]) => (
@@ -168,9 +176,12 @@ export default async function AnalyticsView({
         <Note>
           Dane od {String(kpi.first_order).slice(0, 10)} do {String(kpi.last_order).slice(0, 10)}. Średnio{" "}
           {Number(kpi.avg_items_per_order).toLocaleString("pl-PL")} szt. na zamówienie. Kwoty przeliczone na PLN kursem
-          NBP z dnia poprzedzającego zamówienie. CoGS pochodzi z dokumentów przyjęć wFirma, liczony metodą EASI
-          (cena z pierwszego przyjęcia towaru) - koszt jest więc zamrożony na kwietniu 2026 i nie odzwierciedla
-          zmian cen zakupu w czasie. Kwota VAT celowo nie jest pokazywana jako wskaźnik: Turis wypełnia ją także
+          NBP z dnia poprzedzającego zamówienie. Zamówienia z ery wFirmy bez faktury (wiszące) nie mają
+          jeszcze rozpoznanego przychodu ani kosztu - nie wchodzą do sum, a ich łączną wartość pokazuje
+          kafelek „Wartość zamówień bez faktury”. CoGS: dla ery wFirmy (od 04.2026) realny koszt z wydań
+          magazynowych WZ, dla starszych zamówień koszt SZACOWANY metodą migracyjną (pierwsze przyjęcie, jak
+          EASI); zamówienia z produktem spoza katalogu wFirmy nie mają kosztu i nie wchodzą do marży.
+          Kwota VAT celowo nie jest pokazywana jako wskaźnik: Turis wypełnia ją także
           dla eksportu z odwrotnym obciążeniem, gdzie podatku nie naliczono (docs/analiza-easi/LUKI-DANYCH.md).
         </Note>
       </>

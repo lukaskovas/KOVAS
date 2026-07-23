@@ -16,6 +16,9 @@ import { supabaseAdmin, fetchAll } from "@/lib/supabase";
 const PAGE_SIZE = 100;
 const BACKOFF_MS = [30_000, 60_000, 120_000, 240_000];
 
+/** Źródło w sync_log dla przyjęć - na nim stoją zakładki ZAKUPY i DOSTAWY (świeżość widoczna w panelu). */
+const RECEIPTS_SOURCE = "wfirma_receipts";
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function emptyToNull(v: unknown): string | null {
@@ -105,6 +108,44 @@ export function toReceiptDocRow(doc: Record<string, unknown>) {
   };
 }
 
+/**
+ * Surowe wydanie WZ -> wiersze wfirma_issue_lines (po jednym na pozycję).
+ *
+ * To jest ŹRÓDŁO REALNEGO KOSZTU: purchase_expense = koszt własny wydanego towaru, który wFirma
+ * wyliczyła i zaksięgowała w momencie wydania (jej wycena magazynowa), a invoice.id z nagłówka
+ * łączy wydanie z fakturą, a więc z zamówieniem Turis. Odwrotnie niż przyjęcia (toLayerRows),
+ * nie zgadujemy kosztu - bierzemy pozycję faktycznie zdjętą z magazynu (patrz migracja 0020).
+ *
+ * Pomijamy pozycje bez towaru albo bez dowiązanej faktury - nie da się ich przypisać do sprzedaży.
+ * Pozycje z purchase_expense = 0 ZOSTAWIAMY: tak wFirma wyceniła to wydanie (brak podstawy
+ * kosztowej po jej stronie) i suma na fakturze ma się zgadzać z jej księgami co do grosza.
+ */
+export function toIssueRows(doc: Record<string, unknown>) {
+  const invoiceId = Number((doc.invoice as { id?: unknown } | undefined)?.id ?? 0);
+  if (!invoiceId) return [];
+  const rows: Record<string, unknown>[] = [];
+  for (const c of unwrapDocContents(doc)) {
+    const goodId = Number((c.good as { id?: unknown } | undefined)?.id ?? 0);
+    const quantity = Number(c.count);
+    const purchaseExpense = Number(c.purchase_expense);
+    if (!goodId || !Number.isFinite(quantity) || !Number.isFinite(purchaseExpense)) continue;
+    rows.push({
+      id: Number(c.id),
+      good_id: goodId,
+      invoice_id: invoiceId,
+      invoicecontent_id: Number((c.invoicecontent as { id?: unknown } | undefined)?.id ?? 0) || null,
+      doc_id: Number(doc.id),
+      doc_number: String(doc.fullnumber ?? ""),
+      issue_date: String(doc.date ?? ""),
+      quantity,
+      purchase_expense: purchaseExpense,
+      raw: c,
+      synced_at: new Date().toISOString(),
+    });
+  }
+  return rows;
+}
+
 export async function syncGoods(): Promise<{ upserted: number; partial: boolean }> {
   const db = supabaseAdmin();
   let upserted = 0;
@@ -128,32 +169,62 @@ export async function syncGoods(): Promise<{ upserted: number; partial: boolean 
  * Przyjęcia PW i PZ wraz z pozycjami. Pobieramy WYŁĄCZNIE te dwa typy - pozostałe dokumenty
  * magazynowe (rezerwacje R, wydania WZ, RW, MM) nie niosą ceny zakupu, a jest ich ~50x więcej.
  */
-export async function syncReceiptLayers(): Promise<{ docs: number; layers: number; partial: boolean }> {
+export async function syncReceiptLayers(runType = "cron"): Promise<{ docs: number; layers: number; partial: boolean }> {
   const db = supabaseAdmin();
+  const { data: logRow } = await db
+    .from("sync_log")
+    .insert({ source: RECEIPTS_SOURCE, run_type: runType, status: "running" })
+    .select("id")
+    .single();
+
   const headers: Record<string, unknown>[] = [];
   const layers: Record<string, unknown>[] = [];
+  let partial = false;
 
-  for (const type of ["PW", "PZ"] as const) {
-    for (let page = 1; ; page++) {
-      const rows = await withRetry(() => findWarehouseDocsPage(type, page, PAGE_SIZE));
-      if (rows === null) return { docs: headers.length, layers: layers.length, partial: true };
-      if (rows.length === 0) break;
+  try {
+    for (const type of ["PW", "PZ"] as const) {
+      for (let page = 1; ; page++) {
+        const rows = await withRetry(() => findWarehouseDocsPage(type, page, PAGE_SIZE));
+        // Limit API wyczerpał próby: przerywamy i ZAPISUJEMY, co zdążyliśmy (upsert niżej) -
+        // częściowy pobór jest lepszy niż utrata całej strony; następny przebieg dopełni.
+        if (rows === null) { partial = true; break; }
+        if (rows.length === 0) break;
 
-      for (const doc of rows) {
-        headers.push(toReceiptDocRow(doc));
-        layers.push(...toLayerRows(doc));
+        for (const doc of rows) {
+          headers.push(toReceiptDocRow(doc));
+          layers.push(...toLayerRows(doc));
+        }
+        if (rows.length < PAGE_SIZE) break;
       }
-      if (rows.length < PAGE_SIZE) break;
+      if (partial) break;
     }
+
+    // Nagłówki (dostawca, wartość dostawy) do raportu dostaw - obok warstw kosztowych.
+    const { error: hErr } = await db.from("wfirma_receipt_docs").upsert(headers);
+    if (hErr) throw new Error(`upsert wfirma_receipt_docs: ${hErr.message}`);
+
+    const { error } = await db.from("wfirma_receipt_layers").upsert(layers);
+    if (error) throw new Error(`upsert wfirma_receipt_layers: ${error.message}`);
+
+    await db
+      .from("sync_log")
+      .update({
+        finished_at: new Date().toISOString(),
+        status: partial ? "partial" : "success",
+        records_seen: headers.length,
+        records_upserted: layers.length,
+        error_message: partial ? "Przerwano: limit API wFirma wyczerpał próby na stronie przyjęć" : null,
+      })
+      .eq("id", logRow?.id);
+
+    return { docs: headers.length, layers: layers.length, partial };
+  } catch (err) {
+    await db
+      .from("sync_log")
+      .update({ finished_at: new Date().toISOString(), status: "failed", error_message: String(err) })
+      .eq("id", logRow?.id);
+    throw err;
   }
-
-  // Nagłówki (dostawca, wartość dostawy) do raportu dostaw - obok warstw kosztowych.
-  const { error: hErr } = await db.from("wfirma_receipt_docs").upsert(headers);
-  if (hErr) throw new Error(`upsert wfirma_receipt_docs: ${hErr.message}`);
-
-  const { error } = await db.from("wfirma_receipt_layers").upsert(layers);
-  if (error) throw new Error(`upsert wfirma_receipt_layers: ${error.message}`);
-  return { docs: headers.length, layers: layers.length, partial: false };
 }
 
 /**
@@ -193,6 +264,33 @@ export async function syncReceiptContractors(): Promise<{ fetched: number; parti
     if (error) throw new Error(`upsert wfirma_contractors: ${error.message}`);
   }
   return { fetched: rows.length, partial: false };
+}
+
+/**
+ * Wydania WZ wraz z pozycjami -> wfirma_issue_lines. To główne źródło CoGS (patrz toIssueRows):
+ * każda linia niesie realny koszt własny i dowiązanie do faktury. Pobieramy tylko typ WZ.
+ */
+export async function syncIssueLines(): Promise<{ docs: number; lines: number; partial: boolean }> {
+  const db = supabaseAdmin();
+  let docs = 0;
+  const lines: Record<string, unknown>[] = [];
+
+  for (let page = 1; ; page++) {
+    const rows = await withRetry(() => findWarehouseDocsPage("WZ", page, PAGE_SIZE));
+    if (rows === null) return { docs, lines: lines.length, partial: true };
+    if (rows.length === 0) break;
+
+    docs += rows.length;
+    for (const doc of rows) lines.push(...toIssueRows(doc));
+    if (rows.length < PAGE_SIZE) break;
+  }
+
+  // Upsert porcjami - wydań są tysiące pozycji, jeden request bywa za duży.
+  for (let i = 0; i < lines.length; i += 500) {
+    const { error } = await db.from("wfirma_issue_lines").upsert(lines.slice(i, i + 500));
+    if (error) throw new Error(`upsert wfirma_issue_lines: ${error.message}`);
+  }
+  return { docs, lines: lines.length, partial: false };
 }
 
 type ProductRow = { id: number; name: string | null; sku: string | null; ean: string | null };

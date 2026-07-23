@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import SyncStatus from "./sync-status";
+import RefreshButton from "./refresh-button";
 import { signOut } from "./login/actions";
 import type { CurrentUser } from "@/lib/auth";
 
@@ -40,6 +41,7 @@ export default function Shell({
             <Suspense fallback={null}>
               <SyncStatus />
             </Suspense>
+            <RefreshButton />
             <div className="font-display flex items-center gap-4 text-xs uppercase tracking-wider">
               {user.role === "admin" && (
                 <Link href="/admin/uzytkownicy" className="text-gold hover:text-cream">

@@ -128,6 +128,68 @@ export async function findInvoicesSince(sinceId: number, limit = 100): Promise<R
   return unwrapIndexed<Record<string, unknown>>(json.invoices, "invoice");
 }
 
+/**
+ * Faktury wystawione OD podanej daty (włącznie), stronami rosnąco po id.
+ * W przeciwieństwie do findInvoicesSince (kursor po max id, pobiera tylko NOWE) tu re-fetchujemy
+ * istniejące faktury, żeby zmiany naniesione na nich w wFirma (korekta, kwota, status zapłaty)
+ * trafiły do bazy - do cyklicznego douczania okna ostatnich N dni. dateFrom = 'YYYY-MM-DD'.
+ */
+export async function findInvoicesByDateSince(dateFrom: string, page: number, limit = 100): Promise<Record<string, unknown>[]> {
+  const body = `<?xml version="1.0" encoding="UTF-8"?>
+<api>
+  <invoices>
+    <parameters>
+      <conditions>
+        <condition>
+          <field>date</field>
+          <operator>ge</operator>
+          <value>${dateFrom}</value>
+        </condition>
+      </conditions>
+      <order><asc>Invoice.id</asc></order>
+      <page>${page}</page>
+      <limit>${limit}</limit>
+    </parameters>
+  </invoices>
+</api>`;
+  const json = await wfirmaPost<{ invoices?: unknown }>("invoices", "find", body);
+  return unwrapIndexed<Record<string, unknown>>(json.invoices, "invoice");
+}
+
+/**
+ * Faktury nieopłacone (paymentstate=unpaid) wystawione PRZED podaną datą - dopełnienie okna
+ * po dacie o starsze niezapłacone (nowsze łapie już findInvoicesByDateSince, warunek date lt
+ * eliminuje nakładanie się zbiorów). UWAGA: w danych Kovas paymentstate jest w ~99% 'unpaid'
+ * (pole nieutrzymywane w wFirma - patrz docs/OTWARTE-PYTANIA.md A18), więc ten zbiór jest duży;
+ * odpalany raz na dobę z bramką czasową, nie co cykl. dateBefore = 'YYYY-MM-DD'.
+ */
+export async function findUnpaidInvoicesBefore(dateBefore: string, page: number, limit = 100): Promise<Record<string, unknown>[]> {
+  const body = `<?xml version="1.0" encoding="UTF-8"?>
+<api>
+  <invoices>
+    <parameters>
+      <conditions>
+        <condition>
+          <field>paymentstate</field>
+          <operator>eq</operator>
+          <value>unpaid</value>
+        </condition>
+        <condition>
+          <field>date</field>
+          <operator>lt</operator>
+          <value>${dateBefore}</value>
+        </condition>
+      </conditions>
+      <order><asc>Invoice.id</asc></order>
+      <page>${page}</page>
+      <limit>${limit}</limit>
+    </parameters>
+  </invoices>
+</api>`;
+  const json = await wfirmaPost<{ invoices?: unknown }>("invoices", "find", body);
+  return unwrapIndexed<Record<string, unknown>>(json.invoices, "invoice");
+}
+
 /** Katalog towarów wFirma - klucz mapowania na produkty Turis (id, name, code, ean). */
 export async function findGoodsPage(page: number, limit = 100): Promise<Record<string, unknown>[]> {
   const body = `<?xml version="1.0" encoding="UTF-8"?>
@@ -149,11 +211,16 @@ export async function findGoodsPage(page: number, limit = 100): Promise<Record<s
  * warehouse_document_contents w tej samej odpowiedzi, więc nie potrzeba `get` per dokument.
  *
  * Filtr po typie jest istotny wydajnościowo, nie kosmetycznie: przyjęć (PW+PZ) jest ~46,
- * a wszystkich dokumentów ~2658 (reszta to rezerwacje R i wydania WZ, bez wartości kosztowej).
+ * wydań (WZ) ~882, a wszystkich dokumentów ~2658 (reszta to rezerwacje R, RW, MM).
  * Pełny sweep realnie rozbija się o współdzielony limit API wFirma.
+ *
+ * PW/PZ (przyjęcia) niosą cenę ZAKUPU (pole `price`) - do zgadywania kosztu metodą EASI.
+ * WZ (wydania) niosą FAKTYCZNY koszt własny wydanego towaru (pole `purchase_expense`) oraz
+ * dowiązanie do faktury (`invoice.id`) - to jest realny CoGS zaksięgowany przez wFirma przy
+ * sprzedaży i to jego używamy, patrz migracja 0020 i lib/sync/wfirma-costs.ts (syncIssueLines).
  */
 export async function findWarehouseDocsPage(
-  type: "PW" | "PZ",
+  type: "PW" | "PZ" | "WZ",
   page: number,
   limit = 100
 ): Promise<Record<string, unknown>[]> {

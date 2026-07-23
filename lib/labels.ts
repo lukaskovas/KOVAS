@@ -38,9 +38,20 @@ const PAYMENT: Record<string, string> = {
   transfer: "przelew",
 };
 
+/** Status realizacji zamówienia - nasz własny (migracja 0021, liczony w mv_report_orders). */
+const REALIZATION: Record<string, string> = {
+  invoiced: "zrealizowane",
+  awaiting: "wisi (brak faktury)",
+  cancelled: "anulowane",
+};
+
+/** Kolejność wartości w filtrze - wisi na górze (to lista do wyjaśnienia, najważniejsza). */
+export const REALIZATION_KEYS = ["awaiting", "invoiced", "cancelled"] as const;
+
 const lookup = (map: Record<string, string>, v: string | null | undefined) =>
   v ? map[v.toLowerCase().trim()] ?? v : "";
 
 export const matchLabel = (v: string | null | undefined) => lookup(MATCH, v);
 export const orderStatusLabel = (v: string | null | undefined) => lookup(ORDER_STATUS, v);
 export const paymentLabel = (v: string | null | undefined) => lookup(PAYMENT, v);
+export const realizationLabel = (v: string | null | undefined) => lookup(REALIZATION, v);

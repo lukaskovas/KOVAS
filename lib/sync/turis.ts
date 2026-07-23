@@ -14,6 +14,31 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+// Czy błąd jest PRZEJŚCIOWY (zerwane połączenie, chwilowy 5xx, timeout) - takie warto ponowić.
+// Błąd trwały (4xx, HTTP 500 na konkretnym rekordzie, błąd danych) ponawiać nie ma sensu.
+function isTransient(err: unknown): boolean {
+  // "terminated"/"other side closed"/UND_ERR* to undici - zerwane połączenie w trakcie żądania,
+  // dokładnie to co potrafi zrobić Turis pod koniec długiego backfillu. Też retryowalne.
+  return /fetch failed|terminated|other side closed|UND_ERR|network|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket|EAI_AGAIN|HTTP 50[234]|HTTP 429/i.test(String(err));
+}
+
+// Ponawia operację sieciową przy błędzie przejściowym (backoff 0.5/1/2/4/8s, do 6 prób = ~15s
+// cierpliwości). Backfill przechodzi ~700 stron - Turis potrafi zacząć zrzucać połączenia po serii
+// szybkich zapytań (throttling), a taka przerwa bywa dłuższa niż sekunda, stąd długi ogon prób.
+// Zachowuje etykietę w komunikacie, żeby sync_log dalej pokazywał, na czym poległo.
+async function withRetry<T>(label: string, fn: () => Promise<T>, tries = 6): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= tries || !isTransient(err)) {
+        throw new Error(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+    }
+  }
+}
+
 async function logSync(source: string, fn: () => Promise<{ seen: number; upserted: number; failed: number }>) {
   const db = supabaseAdmin();
   const { data: logRow } = await db
@@ -291,29 +316,67 @@ export async function syncAllOrders(
   onProgress?: (page: number, lastPage: number) => void
 ) {
   return logSync("turis_orders_backfill", async () => {
-    let seen = 0;
-    let upserted = 0;
-    let page = 1;
-    let lastPage = 1;
-    do {
-      const { data, meta } = await turisGet<RawOrder>("orders", { page });
-      lastPage = meta?.last_page ?? page;
-      seen += data.length;
-
+    // Pobiera jedną stronę i zapisuje ją (orders przed order_items - FK). Każda operacja z retry.
+    async function ingestPage(page: number): Promise<{ count: number; lastPage: number }> {
+      const { data, meta } = await withRetry(`Turis orders (strona ${page})`, () =>
+        turisGet<RawOrder>("orders", { page })
+      );
       const orderRows = data.map((o) => mapOrder(o, validCompanyIds));
       const itemRows = data.flatMap((o) => mapOrderItems(o, productIndex.validIds, productIndex.unitCost));
-
-      // najpierw orders (FK dla order_items), potem order_items
-      const { error: orderErr } = await supabaseAdmin().from("orders").upsert(orderRows);
-      if (orderErr) throw new Error(`upsert orders (strona ${page}): ${orderErr.message}`);
+      await withRetry(`upsert orders (strona ${page})`, async () => {
+        const { error } = await supabaseAdmin().from("orders").upsert(orderRows);
+        if (error) throw new Error(error.message);
+      });
       if (itemRows.length) {
-        const { error: itemErr } = await supabaseAdmin().from("order_items").upsert(itemRows, { onConflict: "id" });
-        if (itemErr) throw new Error(`upsert order_items (strona ${page}): ${itemErr.message}`);
+        await withRetry(`upsert order_items (strona ${page})`, async () => {
+          const { error } = await supabaseAdmin().from("order_items").upsert(itemRows, { onConflict: "id" });
+          if (error) throw new Error(error.message);
+        });
       }
-      upserted += orderRows.length;
+      return { count: orderRows.length, lastPage: meta?.last_page ?? page };
+    }
+
+    let seen = 0;
+    let upserted = 0;
+
+    // Strona 1 ustala liczbę stron - jeśli nawet ona nie przejdzie mimo retry, nie ma jak dokończyć.
+    const first = await ingestPage(1);
+    seen += first.count;
+    upserted += first.count;
+    const lastPage = first.lastPage;
+    onProgress?.(1, lastPage);
+
+    // Pojedyncza nieudana strona (po wyczerpaniu retry) NIE wywraca całego backfillu - odkładamy ją
+    // i lecimy dalej. Przy niestabilnej sieci zryw dotyka kilku stron, nie całego 700-stronicowego biegu.
+    const failedPages: number[] = [];
+    for (let page = 2; page <= lastPage; page++) {
+      try {
+        const r = await ingestPage(page);
+        seen += r.count;
+        upserted += r.count;
+      } catch {
+        failedPages.push(page);
+      }
       onProgress?.(page, lastPage);
-      page++;
-    } while (page <= lastPage);
+      await new Promise((r) => setTimeout(r, 120)); // tempo - Turis zrzuca połączenia przy serii szybkich zapytań
+    }
+
+    // Druga tura po odłożonych stronach - łapie te, które trafiły w chwilowe okno niedostępności.
+    const stillFailed: number[] = [];
+    for (const page of failedPages) {
+      try {
+        const r = await ingestPage(page);
+        seen += r.count;
+        upserted += r.count;
+      } catch {
+        stillFailed.push(page);
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    if (stillFailed.length) {
+      throw new Error(`nieudane strony po drugiej turze: ${stillFailed.join(", ")}`);
+    }
     return { seen, upserted, failed: 0 };
   });
 }
@@ -324,10 +387,16 @@ export async function syncAllOrders(
 const DELTA_BUFFER_SEC = 60 * 60;
 
 /**
- * Sync PRZYROSTOWY zamówień - tylko zmienione od ostatniego udanego przebiegu.
- * Endpoint orders/updated/<from>/<to>; znaczniki to unix w sekundach (API waliduje: liczba 1-10 cyfr).
+ * Sync PRZYROSTOWY zamówień - tylko UTWORZONE od ostatniego udanego przebiegu.
+ * Endpoint orders/created/<from>/<to>; znaczniki to unix w sekundach (API waliduje: liczba 1-10 cyfr).
  * Do uruchamiania z crona (co 15 min) - w przeciwieństwie do syncAllOrders nie przechodzi ~700 stron,
  * więc mieści się w limicie funkcji serverless. Wołać po syncCompanies()/syncProducts().
+ *
+ * UWAGA - świadome ograniczenie: bliźniaczy endpoint orders/updated/<from>/<to> (który łapałby też
+ * ZMIANY istniejących zamówień - status, płatność, edycja pozycji) wisi po stronie Turis niezależnie
+ * od szerokości okna (potwierdzone empirycznie), więc nie da się na nim polegać. Dlatego cron dociąga
+ * tylko NOWE zamówienia. Zmiany statusu/płatności istniejących zamówień pokryje dopiero warstwa
+ * webhooków (event order.updated) - następny krok. Pełny backfill (npm run backfill) łata rozjazdy.
  */
 export async function syncOrdersDelta(
   productIndex: ProductIndex,
@@ -370,7 +439,7 @@ export async function syncOrdersDelta(
     let page = 1;
     let lastPage = 1;
     do {
-      const { data, meta } = await turisGet<RawOrder>(`orders/updated/${fromSec}/${nowSec}`, { page });
+      const { data, meta } = await turisGet<RawOrder>(`orders/created/${fromSec}/${nowSec}`, { page });
       lastPage = meta?.last_page ?? page;
       seen += data.length;
 
@@ -400,6 +469,85 @@ export async function syncOrdersDelta(
       })
       .eq("id", logRow?.id);
     return { seen, upserted, fromSec, toSec: nowSec };
+  } catch (err) {
+    await db
+      .from("sync_log")
+      .update({ finished_at: new Date().toISOString(), status: "failed", error_message: String(err) })
+      .eq("id", logRow?.id);
+    throw err;
+  }
+}
+
+// Statusy uznane za KOŃCOWE - zamówień w tych stanach nie odpytujemy już o zmiany.
+// "Shipped" traktujemy jak zamknięcie (u Kovas ~98% zamówień zostaje na "Shipped", a sprzedaż
+// po wysyłce jest finalna), "Completed" to jawne domknięcie. Wszystko inne = otwarte, śledzone.
+const TERMINAL_STATUSES = ["Shipped", "Completed"];
+
+/**
+ * Odświeża statusy OTWARTYCH zamówień - tych, które nie osiągnęły jeszcze stanu końcowego.
+ * Czyta ich id z naszej bazy, pobiera aktualny stan z Turis (GET /orders/:id) i zapisuje.
+ * Dzięki temu przejście "otwarte -> Shipped" łapiemy bez zepsutego endpointu orders/updated
+ * i bez webhooków. Zbiór otwartych jest mały (rząd dziesiątek), więc odpytanie po jednym jest tanie.
+ * Wołać po syncOrdersDelta - nowe zamówienia trafiają do bazy najpierw jako otwarte, potem tu są śledzone.
+ */
+export async function syncOpenOrders(
+  productIndex: ProductIndex,
+  validCompanyIds: Set<number>,
+  runType: "cron" | "manual" = "cron"
+) {
+  const db = supabaseAdmin();
+  const inList = `(${TERMINAL_STATUSES.map((s) => `"${s}"`).join(",")})`;
+
+  const { data: openRows, error: readErr } = await db
+    .from("orders")
+    .select("id")
+    .not("current_status_name", "in", inList);
+  if (readErr) throw new Error(`odczyt otwartych zamówień: ${readErr.message}`);
+  const ids = (openRows ?? []).map((r: { id: number }) => r.id);
+
+  const { data: logRow } = await db
+    .from("sync_log")
+    .insert({ source: "turis_orders_open_refresh", run_type: runType, status: "running", records_seen: ids.length })
+    .select("id")
+    .single();
+
+  try {
+    let upserted = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        const { data } = await turisGet<RawOrder>(`orders/${id}`);
+        // GET /orders/:id zwraca pojedynczy obiekt (turisGet typuje go jako tablicę - stąd rozróżnienie)
+        const o = (Array.isArray(data) ? data[0] : (data as unknown as RawOrder)) as RawOrder | undefined;
+        if (!o) {
+          failed++;
+          continue;
+        }
+        const { error: orderErr } = await db.from("orders").upsert(mapOrder(o, validCompanyIds));
+        if (orderErr) throw new Error(orderErr.message);
+        const itemRows = mapOrderItems(o, productIndex.validIds, productIndex.unitCost);
+        if (itemRows.length) {
+          const { error: itemErr } = await db.from("order_items").upsert(itemRows, { onConflict: "id" });
+          if (itemErr) throw new Error(itemErr.message);
+        }
+        upserted++;
+      } catch {
+        // pojedyncze zamówienie nie może wywrócić całego cyklu - liczymy błąd i idziemy dalej
+        failed++;
+      }
+    }
+
+    await db
+      .from("sync_log")
+      .update({
+        finished_at: new Date().toISOString(),
+        status: failed > 0 ? "partial" : "success",
+        records_seen: ids.length,
+        records_upserted: upserted,
+        records_failed: failed,
+      })
+      .eq("id", logRow?.id);
+    return { open: ids.length, upserted, failed };
   } catch (err) {
     await db
       .from("sync_log")

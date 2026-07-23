@@ -5,7 +5,7 @@ import type { FilterOptions, ContractorOption } from "@/lib/queries";
 import type { ReportView } from "@/lib/report-columns";
 import Dropdown from "./dropdown";
 import DatePicker from "./date-picker";
-import { matchLabel, orderStatusLabel } from "@/lib/labels";
+import { matchLabel, orderStatusLabel, realizationLabel, REALIZATION_KEYS } from "@/lib/labels";
 
 /**
  * Pasek filtrów. Nawiguje zwykłym formularzem GET - filtry lądują w URL-u,
@@ -20,6 +20,7 @@ export type ActiveFilters = {
   status?: string;
   currency?: string;
   match?: string;
+  realization?: string;
   country?: string;
   agent?: string;
   ctype?: string;
@@ -73,7 +74,7 @@ export default function Filters({
 }) {
   const hasFilters = Boolean(
     active.q || active.from || active.to || active.status || active.currency || active.match ||
-    active.country || active.agent || active.ctype || active.company,
+    active.realization || active.country || active.agent || active.ctype || active.company,
   );
   const [open, setOpen] = useState(hasFilters);
 
@@ -116,6 +117,8 @@ export default function Filters({
             {view === "orders" && (
               <>
                 <Select name="status" value={active.status} label="Status" options={options.statuses} translate={orderStatusLabel} />
+                {/* Realizacja - opcje domknięte (3 wartości liczone w migawce, migracja 0021), nie z bazy */}
+                <Select name="realization" value={active.realization} label="Realizacja" options={[...REALIZATION_KEYS]} translate={realizationLabel} />
                 <Select name="match" value={active.match} label="Dopasowanie" options={options.matches} translate={matchLabel} />
                 {/* Kontrahent po stabilnym company_id - wyszukiwarka, bo firm jest ~1,3 tys. */}
                 <Dropdown

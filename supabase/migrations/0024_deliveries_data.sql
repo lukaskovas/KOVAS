@@ -10,7 +10,7 @@
 -- ============================================================
 -- products.brand_id (migracja 0001) to liczbowe ID marki z Turis, bez nazwy. Endpoint Turis
 -- /brands daje nazwy; bez tej tabeli brand w raporcie byłby tylko numerem.
-create table brands (
+create table if not exists brands (
   id         bigint primary key,               -- Turis brand.id (= products.brand_id)
   name       text not null,
   raw        jsonb not null,
@@ -22,7 +22,7 @@ create table brands (
 -- ============================================================
 -- Osobno od `companies` (to kontrahenci-KLIENCI z Turis) - dostawcy przyjęć to inne podmioty,
 -- żyjące po stronie wFirma. Zaciągamy tylko tych, którzy występują na przyjęciach (garść ID).
-create table wfirma_contractors (
+create table if not exists wfirma_contractors (
   id         bigint primary key,               -- wFirma contractor.id
   name       text not null,
   nip        text,
@@ -36,7 +36,7 @@ create table wfirma_contractors (
 -- Pozycje siedzą w wfirma_receipt_layers, ale nagłówka (dostawca, wartość dokumentu) tam nie ma -
 -- `raw` warstwy to POZYCJA, nie nagłówek. Trzymamy nagłówek osobno, żeby raport dostaw mógł pokazać
 -- kto dostarczył i za ile. Zapełniane w tym samym przebiegu co warstwy (lib/sync/wfirma-costs.ts).
-create table wfirma_receipt_docs (
+create table if not exists wfirma_receipt_docs (
   doc_id        bigint primary key,            -- wFirma warehouse_document.id
   doc_number    text not null,
   doc_type      text not null,                 -- PW | PZ
@@ -49,4 +49,4 @@ create table wfirma_receipt_docs (
   raw           jsonb not null,                 -- nagłówek dokumentu BEZ pozycji (te są w warstwach)
   synced_at     timestamptz not null default now()
 );
-create index wfirma_receipt_docs_type_date_idx on wfirma_receipt_docs (doc_type, receipt_date);
+create index if not exists wfirma_receipt_docs_type_date_idx on wfirma_receipt_docs (doc_type, receipt_date);
