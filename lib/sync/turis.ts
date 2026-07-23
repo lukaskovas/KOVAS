@@ -17,7 +17,9 @@ function chunk<T>(arr: T[], size: number): T[][] {
 // Czy błąd jest PRZEJŚCIOWY (zerwane połączenie, chwilowy 5xx, timeout) - takie warto ponowić.
 // Błąd trwały (4xx, HTTP 500 na konkretnym rekordzie, błąd danych) ponawiać nie ma sensu.
 function isTransient(err: unknown): boolean {
-  return /fetch failed|network|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket|EAI_AGAIN|HTTP 50[234]|HTTP 429/i.test(String(err));
+  // "terminated"/"other side closed"/UND_ERR* to undici - zerwane połączenie w trakcie żądania,
+  // dokładnie to co potrafi zrobić Turis pod koniec długiego backfillu. Też retryowalne.
+  return /fetch failed|terminated|other side closed|UND_ERR|network|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket|EAI_AGAIN|HTTP 50[234]|HTTP 429/i.test(String(err));
 }
 
 // Ponawia operację sieciową przy błędzie przejściowym (backoff 0.5/1/2/4/8s, do 6 prób = ~15s
@@ -314,22 +316,13 @@ export async function syncAllOrders(
   onProgress?: (page: number, lastPage: number) => void
 ) {
   return logSync("turis_orders_backfill", async () => {
-    let seen = 0;
-    let upserted = 0;
-    let page = 1;
-    let lastPage = 1;
-    do {
-      // Pobranie i zapisy owinięte w retry - przy ~700 stronach pojedynczy zryw sieci nie może
-      // ubić całego backfillu (patrz withRetry). Kolejność zapisu: orders (FK) przed order_items.
+    // Pobiera jedną stronę i zapisuje ją (orders przed order_items - FK). Każda operacja z retry.
+    async function ingestPage(page: number): Promise<{ count: number; lastPage: number }> {
       const { data, meta } = await withRetry(`Turis orders (strona ${page})`, () =>
         turisGet<RawOrder>("orders", { page })
       );
-      lastPage = meta?.last_page ?? page;
-      seen += data.length;
-
       const orderRows = data.map((o) => mapOrder(o, validCompanyIds));
       const itemRows = data.flatMap((o) => mapOrderItems(o, productIndex.validIds, productIndex.unitCost));
-
       await withRetry(`upsert orders (strona ${page})`, async () => {
         const { error } = await supabaseAdmin().from("orders").upsert(orderRows);
         if (error) throw new Error(error.message);
@@ -340,13 +333,50 @@ export async function syncAllOrders(
           if (error) throw new Error(error.message);
         });
       }
-      upserted += orderRows.length;
+      return { count: orderRows.length, lastPage: meta?.last_page ?? page };
+    }
+
+    let seen = 0;
+    let upserted = 0;
+
+    // Strona 1 ustala liczbę stron - jeśli nawet ona nie przejdzie mimo retry, nie ma jak dokończyć.
+    const first = await ingestPage(1);
+    seen += first.count;
+    upserted += first.count;
+    const lastPage = first.lastPage;
+    onProgress?.(1, lastPage);
+
+    // Pojedyncza nieudana strona (po wyczerpaniu retry) NIE wywraca całego backfillu - odkładamy ją
+    // i lecimy dalej. Przy niestabilnej sieci zryw dotyka kilku stron, nie całego 700-stronicowego biegu.
+    const failedPages: number[] = [];
+    for (let page = 2; page <= lastPage; page++) {
+      try {
+        const r = await ingestPage(page);
+        seen += r.count;
+        upserted += r.count;
+      } catch {
+        failedPages.push(page);
+      }
       onProgress?.(page, lastPage);
-      page++;
-      // delikatne tempo - ~380 zapytań pod rząd wywoływało u Turisa zrzucanie połączeń; 120 ms
-      // przerwy między stronami zbija tempo na tyle, by throttling nie odcinał backfillu
-      await new Promise((r) => setTimeout(r, 120));
-    } while (page <= lastPage);
+      await new Promise((r) => setTimeout(r, 120)); // tempo - Turis zrzuca połączenia przy serii szybkich zapytań
+    }
+
+    // Druga tura po odłożonych stronach - łapie te, które trafiły w chwilowe okno niedostępności.
+    const stillFailed: number[] = [];
+    for (const page of failedPages) {
+      try {
+        const r = await ingestPage(page);
+        seen += r.count;
+        upserted += r.count;
+      } catch {
+        stillFailed.push(page);
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    if (stillFailed.length) {
+      throw new Error(`nieudane strony po drugiej turze: ${stillFailed.join(", ")}`);
+    }
     return { seen, upserted, failed: 0 };
   });
 }
